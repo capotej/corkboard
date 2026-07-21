@@ -14,15 +14,14 @@ survives restarts and redeployments.
 
 | File                       | Purpose                                                             |
 | -------------------------- | ------------------------------------------------------------------ |
-| `Dockerfile`               | PHP 8.2 + Apache image, downloads DokuWiki "Librarian" (2025-05-14b) |
+| `Dockerfile`               | PHP 8.2 + Apache image, downloads DokuWiki "Mort" (2026-07-14) |
 | `entrypoint.sh`            | Seeds the volume, symlinks `data/` `conf/` `lib/plugins/` `lib/tpl/`, and applies lockdown + bootstraps the admin user when the secret is set |
 | `fly.toml`                 | Fly app config, HTTP service on :80, volume mount, VM sizing        |
 | `conf-seed/`               | Locked-down config templates (closed ACL, `useacl`, no self-registration, JSON-RPC enabled) |
 | `bootstrap-user.php`       | Creates the **admin** and **agent** accounts from Fly secrets (bcrypt, idempotent) |
 | `test-api.sh`              | Confirms the agent can authenticate to the JSON-RPC API (`core.whoAmI`) |
 | `apache-deny-sensitive.conf` | Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/`        |
-| `dokuwiki-opcache.ini`     | Enables + sizes PHP OPcache; preloads DokuWiki's core at startup   |
-| `preload.php`              | Lists the image-shipped core files OPcache precompiles at Apache start |
+| `dokuwiki-opcache.ini`     | Enables + sizes PHP OPcache (preload disabled — see cold-start notes) |
 | `.dockerignore`            | Keeps build context lean                                            |
 
 ## Prerequisites
@@ -207,10 +206,26 @@ curl -s -u "agent:$AGENT_PASS" -H 'Content-Type: application/json' \
 - Otherwise, seed the volume from the image's stock copy (first boot only),
   then **symlink** the webroot path to the volume.
 
-This means: **upgrading DokuWiki = rebuild + redeploy**. Your content and
-config on the volume are untouched; only the core code is replaced. Plugins
-under `lib/plugins/` are also on the volume, so they persist too (but you may
-want to re-check plugin compatibility after a major upgrade).
+`conf/` gets one extra step each boot: its **release-default** files
+(`dokuwiki.php`, the `*.conf` files, `license.php`, …) are refreshed from the
+image so they track the running version, while its **user-managed** files
+(`local.php`, `local.protected.php`, `acl.auth.php`, `users.auth.php`,
+`plugins.local.php`) are skipped and persist on the volume untouched. This
+matters because `conf/` mixes the two: persisting the whole dir *without*
+refreshing the defaults froze them at the first-boot release and broke
+upgrades — Mort added `$conf['syntax']` to `dokuwiki.php`, but a volume seeded
+from the prior release kept the old `dokuwiki.php` (no `'syntax'` key), so the
+parser read it as `null` → fatal `TypeError … ModeRegistry … null given`. (No
+per-file symlinks anywhere — the whole `conf/` dir is symlinked, like the
+others.) User edits made via the web UI (Configuration Manager, ACL Manager,
+User Manager) write to `local.php` / `acl.auth.php` / `users.auth.php`, which
+are persisted, so they survive redeploys.
+
+This means: **upgrading DokuWiki = rebuild + redeploy**. Your content, user
+config, plugins and templates on the volume are untouched; only the core code
+(and the release-default config files) are replaced. Plugins under
+`lib/plugins/` are also on the volume, so they persist too (but you may want
+to re-check plugin compatibility after a major upgrade).
 
 ## Suspend/resume & cold-start optimization
 
@@ -219,8 +234,8 @@ want to re-check plugin compatibility after a major upgrade).
 (saving full VM state to disk) and resumes it on the next request.
 
 - **Normal resume (suspend → resume): ~0.7 s.** Restore is from a Firecracker
-  snapshot, so the running Apache/PHP process and its OPcache SHM — including
-  the preloaded DokuWiki core — are preserved. `entrypoint.sh` does **not**
+  snapshot, so the running Apache/PHP process and its already-warm OPcache SHM
+  are preserved. `entrypoint.sh` does **not**
   re-run, and the first request after resume is already warm. Measured
   end-to-end (with proxy overhead): ~0.7 s vs ~0.3 s when already running.
   Suspend is a good fit here: the VM is 512 MB (≤ 2 GB), has no swap/schedule/
@@ -241,27 +256,33 @@ want to re-check plugin compatibility after a major upgrade).
     `entrypoint.sh` skips spawning `bootstrap-user.php` (one fewer PHP CLI
     cold start). It runs only on first boot, or if an expected account is
     missing.
-  - **OPcache is enabled, sized, and preloaded.** `dokuwiki-opcache.ini` keeps
-    OPcache on with sensible memory/limits; `opcache.preload` runs
-    `preload.php` at Apache startup, pre-compiling DokuWiki's core
-    (`inc/` + `vendor/`) so the first page view doesn't pay PHP compilation
-    cost. You'll see a `[preload] compiled NNN file(s)` line in `fly logs` at
-    startup. A few `Can't preload unlinked class … Unknown parent` warnings may
-    follow — they're benign (those classes load normally via the autoloader at
-    request time) and appear only once at startup.
+  - **OPcache is enabled and sized (preload disabled).** `dokuwiki-opcache.ini`
+    keeps OPcache on with sensible memory/limits; the warm OPcache SHM survives a
+    suspend/resume, so resumed requests stay fast. `opcache.preload` is OFF on
+    purpose: preload compiles files *without executing* them, and several
+    DokuWiki files define runtime constants via a top-level `define()` in the
+    same file as a class (e.g. `inc/HTTP/HTTPClient.php` does
+    `define('HTTP_NL', "\r\n")` beside the `HTTPClient` class). Under preload
+    the class is linked into SHM but the `define()` never runs, so at request
+    time the constant is undefined → fatal `Undefined constant … HTTP_NL` (PHP 8
+    errors on undefined constants). The only cost of disabling it is the first
+    request after a true cold start compiling lazily — and with suspend enabled,
+    the common path never recompiles anyway.
 
 > Note: Fly's proxy decides *when* to suspend on its own ~few-minutes idle
 > loop — there's no `auto_stop_after`/idle-seconds knob in `fly.toml`. For a
 > single idle machine with zero traffic it suspends on the next check. The
 > `concurrency.soft_limit` only matters with >1 machine.
 
-> Why not bake the compiled cache into the image with `opcache.file_cache`?
-> That's the "right" mechanism in theory, but it has a long, unfixed history of
-> segfaults — including in symlink-based deployments like this one (we symlink
-> `data/conf/plugins/tpl` to the volume) — across PHP 7.4 → 8.4 (see
-> php/php-src#19125). Runtime `opcache.preload` is stable and captures nearly
-> all the benefit; and with suspend enabled, the common path doesn't recompile
-> at all.
+> Why not `opcache.preload` (or baking a compiled `opcache.file_cache` into the
+> image)? Preload was enabled once and disabled again — see the note above; it
+> compiles-but-doesn't-execute files, which breaks DokuWiki's
+> `define()`-beside-a-class constants. `opcache.file_cache` is the "right"
+> mechanism in theory but has a long, unfixed history of segfaults — including in
+> symlink-based deployments like this one (we symlink `data/conf/plugins/tpl` to
+> the volume) — across PHP 7.4 → 8.4 (see php/php-src#19125). With suspend
+> enabled the warm OPcache SHM is preserved across resume anyway, so neither
+> mechanism is worth the fragility here.
 
 If you want zero resume latency entirely (at the cost of always running one
 machine), set `min_machines_running = 1` in `[http_service]`.

@@ -7,7 +7,7 @@
 # relocate these directories there:
 #
 #   data/            pages, media, attic, meta, cache, locks, ...
-#   conf/            local config, ACLs, users
+#   conf/            local config, ACLs, users (+ release-default conf files)
 #   lib/plugins/     installed plugins
 #   lib/tpl/         installed templates
 #
@@ -15,6 +15,18 @@
 # image, then symlink the stock locations to the volume so DokuWiki keeps
 # working unchanged. On every subsequent boot the symlinks just point at the
 # already-populated volume.
+#
+# conf/ gets one extra step (see the loop below): its RELEASE-DEFAULT files
+# (dokuwiki.php, the *.conf files, license.php, …) are refreshed from the image
+# EVERY boot so they track the running DokuWiki version, while its
+# user-managed files (local.php, acl.auth.php, users.auth.php, …) persist
+# untouched. Persisting the whole conf/ dir without that refresh froze the
+# defaults at the first-boot release and broke upgrades — Mort added
+# $conf['syntax'] to conf/dokuwiki.php, but a volume seeded from the prior
+# release kept the old dokuwiki.php (no 'syntax' key), so the parser read null
+# and threw TypeError: ModeRegistry::__construct(): Argument #1 ($syntax) …
+# null given. (There are NO per-file symlinks in conf/ — the whole dir is
+# symlinked, like the others.)
 set -euo pipefail
 
 WEBROOT="/var/www/html"
@@ -43,6 +55,24 @@ for rel in ${PERSIST_DIRS}; do
     mkdir -p "$(dirname "${dst}")"
     cp -a "${src}" "${dst}"
     chown -R www-data:www-data "${dst}"
+  fi
+
+  # conf/ special case: it mixes release-shipped defaults (dokuwiki.php, the
+  # *.conf files, license.php, …) that MUST track the running version, with
+  # user-managed files (local.php, acl.auth.php, users.auth.php, …) that must
+  # persist. Refresh the release defaults from the image BEFORE symlinking,
+  # skipping user-managed files. This is what keeps upgrades safe without any
+  # per-file symlinks: conf/dokuwiki.php always matches the running version,
+  # and user edits are never clobbered.
+  if [ "${rel}" = "conf" ]; then
+    for imgfile in "${src}"/*; do
+      [ -e "${imgfile}" ] || continue
+      name="$(basename "${imgfile}")"
+      case "${name}" in
+        local.php|local.protected.php|acl.auth.php|users.auth.php|plugins.local.php) ;;  # user-managed: never overwrite
+        *) cp -a "${imgfile}" "${dst}/${name}" ;;
+      esac
+    done
   fi
 
   # Replace the stock directory with a symlink into the volume.
@@ -79,8 +109,9 @@ if [ -n "${DOKU_ADMIN_PASSWORD:-}" ]; then
   chown www-data:www-data "${PERSIST}/conf/local.protected.php"
   chmod 0640 "${PERSIST}/conf/local.protected.php"
 
-  # The rest is user-editable (title, ACL) — seed once, never clobber edits.
-  for f in local.php acl.auth.php; do
+  # The rest is user-editable (title, ACL, upload mime types) — seed once,
+  # never clobber edits.
+  for f in local.php acl.auth.php mime.local.conf; do
     dst="${PERSIST}/conf/${f}"
     if [ ! -e "${dst}" ]; then
       cp "/usr/local/share/dokuwiki-seed/${f}" "${dst}"

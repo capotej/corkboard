@@ -5,7 +5,7 @@
 FROM php:8.2-apache
 
 # DokuWiki release to install
-ARG DOKUWIKI_VERSION=2025-05-14b
+ARG DOKUWIKI_VERSION=2026-07-14
 ARG DOKUWIKI_URL=https://download.dokuwiki.org/src/dokuwiki/dokuwiki-${DOKUWIKI_VERSION}.tgz
 
 # PHP extensions DokuWiki relies on (gd for image resizing, intl for better
@@ -41,11 +41,10 @@ COPY conf-seed/ /usr/local/share/dokuwiki-seed/
 # of .htaccess / AllowOverride behaviour (protects users.auth.php, etc.).
 COPY apache-deny-sensitive.conf /etc/apache2/conf-enabled/dokuwiki-security.conf
 
-# OPcache + preload (build-time only, zero per-boot cost). Sizes opcache and
-# pre-compiles DokuWiki's core library at Apache startup so the first request
-# after a Fly auto-start is served fast. See the files for details.
+# OPcache tuning (build-time only, zero per-boot cost). Sizes opcache for fast
+# cold starts; preload is intentionally disabled in the ini (it broke runtime
+# constants under Mort). See dokuwiki-opcache.ini for the rationale.
 COPY dokuwiki-opcache.ini /usr/local/etc/php/conf.d/dokuwiki-opcache.ini
-COPY preload.php /usr/local/share/dokuwiki/preload.php
 
 # Creates the initial admin account from Fly secrets on first boot.
 COPY bootstrap-user.php /usr/local/bin/bootstrap-user.php
