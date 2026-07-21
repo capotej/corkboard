@@ -1,0 +1,28 @@
+# fly.toml app configuration file generated for corkboard-example on 2026-07-20T15:17:51-04:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'corkboard-example'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[[mounts]]
+  source = 'dokuwiki_data'
+  destination = '/dokuwiki-persistent'
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 512

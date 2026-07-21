@@ -1,0 +1,9 @@
+.git
+.gitignore
+.dockerignore
+README.md
+fly.toml
+node_modules
+.env
+.env.*
+*.log
