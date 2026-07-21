@@ -87,6 +87,9 @@ have sensible defaults (`admin`/`Administrator`/`agent`/`API Agent`/
      `disableactions=register,resendpwd` (no self-registration / resets), and
      `remote=1` + `remoteuser=@api,@admin` (enables the JSON-RPC API)
    - `conf/local.php` → title + language
+   - `conf/plugins.local.php` → disables the bundled `popularity`,
+     `authpdo`, `authldap`, and `authad` plugins (anonymous-stats + unused
+     auth backends off by default; `authplain` stays enabled)
 2. Creates the accounts in `conf/users.auth.php` (bcrypt-hashed):
    - **admin** (`admin`) — groups `admin,user` (superuser via `@admin`)
    - **agent** (`agent`) — groups `user,api` (read/write pages + API access)

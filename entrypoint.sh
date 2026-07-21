@@ -109,9 +109,9 @@ if [ -n "${DOKU_ADMIN_PASSWORD:-}" ]; then
   chown www-data:www-data "${PERSIST}/conf/local.protected.php"
   chmod 0640 "${PERSIST}/conf/local.protected.php"
 
-  # The rest is user-editable (title, ACL, upload mime types) — seed once,
-  # never clobber edits.
-  for f in local.php acl.auth.php mime.local.conf; do
+  # The rest is user-editable (title, ACL, upload mime types, plugin
+  # enable/disable) — seed once, never clobber edits.
+  for f in local.php acl.auth.php mime.local.conf plugins.local.php; do
     dst="${PERSIST}/conf/${f}"
     if [ ! -e "${dst}" ]; then
       cp "/usr/local/share/dokuwiki-seed/${f}" "${dst}"
