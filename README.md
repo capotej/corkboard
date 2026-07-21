@@ -14,7 +14,7 @@ survives restarts and redeployments.
 
 | File                       | Purpose                                                             |
 | -------------------------- | ------------------------------------------------------------------ |
-| `Dockerfile`               | PHP 8.2 + Apache image, downloads DokuWiki "Mort" (2026-07-14) |
+| `Dockerfile`               | PHP 8.5.8 + Apache image, downloads DokuWiki "Mort" (2026-07-14) |
 | `entrypoint.sh`            | Seeds the volume, symlinks `data/` `conf/` `lib/plugins/` `lib/tpl/`, and applies lockdown + bootstraps the admin user when the secret is set |
 | `fly.toml`                 | Fly app config, HTTP service on :80, volume mount, VM sizing        |
 | `conf-seed/`               | Locked-down config templates (closed ACL, `useacl`, no self-registration, JSON-RPC enabled) |
@@ -280,7 +280,7 @@ to re-check plugin compatibility after a major upgrade).
 > `define()`-beside-a-class constants. `opcache.file_cache` is the "right"
 > mechanism in theory but has a long, unfixed history of segfaults — including in
 > symlink-based deployments like this one (we symlink `data/conf/plugins/tpl` to
-> the volume) — across PHP 7.4 → 8.4 (see php/php-src#19125). With suspend
+> the volume) — across PHP 7.4 → 8.5 (see php/php-src#19125). With suspend
 > enabled the warm OPcache SHM is preserved across resume anyway, so neither
 > mechanism is worth the fragility here.
 

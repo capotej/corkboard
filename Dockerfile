@@ -2,7 +2,7 @@
 # DokuWiki is a flat-file wiki (no database), so all we need is PHP + Apache
 # and a persistent volume mounted for data/, conf/ and installed plugins/templates.
 
-FROM php:8.2-apache
+FROM php:8.5.8-apache
 
 # DokuWiki release to install
 ARG DOKUWIKI_VERSION=2026-07-14
@@ -17,7 +17,7 @@ RUN set -eux; \
         libzip-dev libicu-dev \
         curl wget ca-certificates; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
-    docker-php-ext-install -j"$(nproc)" gd zip intl opcache; \
+    docker-php-ext-install -j"$(nproc)" gd zip intl; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
 
 # Enable Apache rewrite module (DokuWiki nice URLs / .htaccess support).
