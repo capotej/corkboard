@@ -161,7 +161,11 @@ done
 # to the idempotent bootstrap (which chowns its own output).
 USERS_FILE="${PERSIST}/conf/users.auth.php"
 need_bootstrap=0
-user_present() { [ -f "${USERS_FILE}" ] && grep -q "^${1}:" "${USERS_FILE}"; }
+# Literal first-field match via awk: a username like "a.b" must not be
+# treated as a regex the way `grep "^${1}:"` would. (A mismatch only ever
+# causes a redundant bootstrap-user.php run — which re-checks with strict ===
+# — but this is correct regardless.)
+user_present() { [ -f "${USERS_FILE}" ] && awk -F: -v u="$1" '$1==u {f=1} END{exit !f}' "${USERS_FILE}"; }
 ADMIN_USER="${DOKU_ADMIN_USER:-admin}"
 AGENT_USER="${DOKU_AGENT_USER:-agent}"
 user_present "${ADMIN_USER}" || need_bootstrap=1
