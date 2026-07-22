@@ -39,10 +39,10 @@ RUN set -eux; \
     tar -xzf /tmp/dokuwiki.tgz -C /var/www/html --strip-components=1; \
     rm /tmp/dokuwiki.tgz
 
-# Locked-down config templates. These are NOT placed in conf/ at build time —
-# the image's conf/ stays pristine so DokuWiki's web installer still works.
-# entrypoint.sh writes them into the volume's conf/ only when
-# DOKU_ADMIN_PASSWORD is set (i.e. the closed-wiki default is opt-in via secret).
+# Locked-down config templates. The image's conf/ stays pristine at build
+# time; entrypoint.sh always writes these into the volume's conf/ (the wiki
+# ships closed by default). DOKU_ADMIN_PASSWORD (a Fly secret) is required —
+# the entrypoint fails fast if it's missing.
 COPY conf-seed/ /usr/local/share/dokuwiki-seed/
 
 # Defense-in-depth: block direct HTTP access to data/conf/bin/inc regardless

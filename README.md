@@ -2,8 +2,8 @@
 
 A minimal, production-ready setup for running
 [DokuWiki](https://www.dokuwiki.org/) (a flat-file wiki — no database) on
-[Fly.io](https://fly.io), with an **opt-in closed-wiki default** and an
-auto-provisioned admin account.
+[Fly.io](https://fly.io), with a **closed-wiki default** and an admin
+account auto-provisioned from a required Fly secret.
 
 DokuWiki stores everything (pages, media, config, plugins) as files on disk.
 Because Fly.io machines are ephemeral, this setup mounts a persistent Fly
@@ -15,7 +15,7 @@ survives restarts and redeployments.
 | File                       | Purpose                                                             |
 | -------------------------- | ------------------------------------------------------------------ |
 | `Dockerfile`               | PHP 8.5.8 + Apache image, downloads DokuWiki "Mort" (2026-07-14) |
-| `entrypoint.sh`            | Seeds the volume, symlinks `data/` `conf/` `lib/plugins/` `lib/tpl/`, and applies lockdown + bootstraps the admin user when the secret is set |
+| `entrypoint.sh`            | Seeds the volume, symlinks `data/` `conf/` `lib/plugins/` `lib/tpl/`, applies the lockdown by default, and bootstraps the admin from the required `DOKU_ADMIN_PASSWORD` secret |
 | `fly.toml`                 | Fly app config, HTTP service on :80, volume mount, VM sizing        |
 | `conf-seed/`               | Locked-down config templates (closed ACL, `useacl`, no self-registration, JSON-RPC enabled) |
 | `bootstrap-user.php`       | Creates the **admin** and **agent** accounts from Fly secrets (bcrypt, idempotent) |
@@ -41,8 +41,8 @@ fly launch --no-deploy
 #    1 GB is plenty for most wikis; grow it later with `fly volumes extend`.
 fly volumes create dokuwiki_data --size 1
 
-# 3. (Recommended) set the admin secret BEFORE first deploy to get a closed
-#    wiki out of the box — see "Locking it down" below.
+# 3. REQUIRED: set the admin password secret BEFORE first deploy. The wiki
+#    ships closed by default and the container won't start without it.
 fly secrets set DOKU_ADMIN_PASSWORD='choose-a-strong-password' -a dokuwiki
 
 # 4. Deploy
@@ -53,10 +53,16 @@ The app will be live at `https://<your-app>.fly.dev`.
 
 ## Locking it down (closed wiki)
 
-There are **two modes**, selected by whether the `DOKU_ADMIN_PASSWORD` secret
-is set **before first boot** (i.e. before the volume is seeded):
+The wiki ships **closed by default**. On every boot the entrypoint writes the
+lockdown config into the volume, bootstraps the admin account from a Fly
+secret, and removes the web installer — there is no open/web-installer mode.
 
-### Mode A — closed wiki by default (recommended)
+`DOKU_ADMIN_PASSWORD` is **required**: the admin password can't be baked into
+the image (it would leak via git + `docker history`), so it must be provided as
+a Fly secret. If it's missing the entrypoint fails fast with a clear error
+(visible in `fly logs`) instead of coming up as an open wiki.
+`DOKU_AGENT_PASSWORD` is optional and provisions the API user described in
+[JSON-RPC API + the agent user](#json-rpc-api--the-agent-user) below.
 
 Set the secrets, then deploy:
 
@@ -73,11 +79,9 @@ fly secrets set \
   -a dokuwiki
 ```
 
-`DOKU_ADMIN_PASSWORD` is required (it also triggers the locked-down mode).
-`DOKU_AGENT_PASSWORD` is optional and provisions the API user described in
-[JSON-RPC API + the agent user](#json-rpc-api--the-agent-user) below. The rest
-have sensible defaults (`admin`/`Administrator`/`agent`/`API Agent`/
-`<user>@localhost`). On first boot the entrypoint:
+Only `DOKU_ADMIN_PASSWORD` is required; the rest have sensible defaults
+(`admin`/`Administrator`/`agent`/`API Agent`/`<user>@localhost`). On first boot
+the entrypoint:
 
 1. Writes the locked-down config to the volume **once** (never overwriting
    later edits):
@@ -105,35 +109,21 @@ overwrite an existing user, so password changes you make in the UI survive.
 > `docker history`, and committed to git). The secret is encrypted in Fly and
 > never enters the image or the repo.
 
-### Mode B — standard web installer
+### Re-applying seed defaults to an existing volume
 
-If you deploy **without** the secret, the image's `conf/` stays pristine and
-DokuWiki's web installer (`install.php`) runs normally. Open the site and:
-
-1. Set a title.
-2. Pick an **ACL policy** (e.g. "Closed wiki").
-3. Create the **Superuser** + password.
-4. Save.
-
-You can lock things down afterwards via **Admin → Access Control List
-Management** (the two rules are `* @ALL 0` and `* @user 8`).
-
-### Locking down an already-deployed (open) instance
-
-The lockdown config is only seeded onto an **empty** volume. If you already
-deployed in Mode B, the quickest path to the baked default is to reset the
-volume and redeploy with the secret set:
+`local.protected.php` is re-synced from the image on every boot, so lockdown
+changes in `conf-seed/` take effect on the next deploy automatically. The other
+seed files (`local.php`, `acl.auth.php`, `plugins.local.php`, `mime.local.conf`)
+are written only onto an **empty** volume and never clobbered, so edits you make
+via the web UI (or by hand) survive. To force the current seed defaults back
+onto an existing volume, edit the files under `/dokuwiki-persistent/conf/` over
+SSH, or reset the volume:
 
 ```bash
-fly secrets set DOKU_ADMIN_PASSWORD='...' -a dokuwiki
-fly volume destroy dokuwiki_data ...   # destroy the old volume (LOSES content!)
+fly volumes destroy <volume-id>      # LOSES content!
 fly volumes create dokuwiki_data --size 1
 fly deploy
 ```
-
-If you want to keep existing content, apply the two ACL rules by hand instead:
-**Admin → Access Control List Management**, or edit
-`/dokuwiki-persistent/conf/acl.auth.php` over SSH.
 
 ## JSON-RPC API + the agent user
 
@@ -326,18 +316,20 @@ fly ssh sftp get /dokuwiki-persistent/data ./dokuwiki-data-backup
 
 - **`No volume ... found`** — you forgot `fly volumes create`. The volume name
   must match `source = "dokuwiki_data"` in `fly.toml`.
-- **Can't log in after a "closed" deploy** — confirm the secret was set
-  *before* first boot (`fly secrets list -a dokuwiki`). If the volume was
-  already seeded in Mode B, the admin wasn't bootstrapped; reset the volume or
-  add the user manually.
-- **`install.php` says configs are modified** — expected once the lockdown
-  config exists. Use the bootstrapped admin (Mode A) or reset the volume.
-- **Installer loops / "not writable"** — the entrypoint chowns the webroot to
-  `www-data`; if you override the image, keep that user.
+- **Container exits / won't start** — `DOKU_ADMIN_PASSWORD` is required. If
+  it's unset the entrypoint prints `FATAL: DOKU_ADMIN_PASSWORD is not set.` and
+  exits. Set it (`fly secrets set DOKU_ADMIN_PASSWORD='...' -a <app>`) and
+  redeploy.
+- **Can't log in** — confirm `DOKU_ADMIN_PASSWORD` was set before first boot
+  (`fly secrets list -a <app>`). The admin is bootstrapped only when the secret
+  is present; if the volume was seeded without it, set the secret and reset the
+  volume (or add the user via `fly ssh console`).
+- **Permission errors / "not writable"** — Apache runs as `www-data`; if you
+  override the image, keep that user and the webroot ownership.
 - **JSON-RPC returns an error / `403`-style denial** — `remote=1` and
-  `remoteuser=@api,@admin` are only seeded onto a fresh volume. On an existing
-  instance add them to `/dokuwiki-persistent/conf/local.protected.php`, or put
-  your user in the `api` group. The agent is created on next boot if
-  `DOKU_AGENT_PASSWORD` is set.
+  `remoteuser=@api,@admin` live in `local.protected.php`, which is re-synced
+  from the image every boot, so they're always in effect. If you've restricted
+  `remoteuser` further, make sure your user is in an allowed group. The agent
+  is created on next boot if `DOKU_AGENT_PASSWORD` is set.
 - **Lost data after deploy** — confirm the volume is attached
   (`fly volumes list`) and that `destination` is `/dokuwiki-persistent`.
