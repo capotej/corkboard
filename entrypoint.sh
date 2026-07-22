@@ -38,6 +38,18 @@ PERSIST_DIRS="data conf lib/plugins lib/tpl"
 mkdir -p "${PERSIST}"
 chown www-data:www-data "${PERSIST}"
 
+# Defense: the Dockerfile assumes PHP 8.5 ships OPcache statically compiled
+# (so it no longer runs `docker-php-ext-install opcache`). If that assumption
+# is ever wrong, OPcache is silently absent and cold starts get slower — surface
+# it loudly here instead of letting it degrade quietly. Non-fatal: the wiki
+# works without opcache (just slower cold starts). ~40ms, cold starts only.
+if ! php -r 'exit(extension_loaded("Zend OPcache") ? 0 : 1);' 2>/dev/null; then
+  echo "[entrypoint] WARNING: Zend OPcache is NOT loaded."
+  echo "[entrypoint]   Cold starts will be slower. The Dockerfile assumes PHP 8.5"
+  echo "[entrypoint]   statically compiles OPcache (see dokuwiki-opcache.ini); if this"
+  echo "[entrypoint]   base image doesn't, re-add the opcache install step."
+fi
+
 for rel in ${PERSIST_DIRS}; do
   src="${WEBROOT}/${rel}"
   dst="${PERSIST}/${rel}"
@@ -72,6 +84,26 @@ for rel in ${PERSIST_DIRS}; do
         local.php|local.protected.php|acl.auth.php|users.auth.php|plugins.local.php) ;;  # user-managed: never overwrite
         *) cp -a "${imgfile}" "${dst}/${name}" ;;
       esac
+    done
+  fi
+
+  # lib/plugins and lib/tpl ship bundled entries WITH the release (config,
+  # authldap, usermanager, ... / the doku template, ...) AND also hold entries
+  # the user installs via the Extension Manager, which must persist. Refresh the
+  # BUNDLED entries from the image each boot so they track the running DokuWiki
+  # version — mirroring the conf/ release-default refresh above — while entries
+  # on the volume that are NOT in the image (user-installed) are left alone. We
+  # replace each bundled entry wholesale (rm + cp) rather than merge, so files an
+  # upstream release deleted are removed here too. This writes only to the volume
+  # (not overlayfs), so there's no copy-up cost like the old webroot chown, and
+  # it runs only on a true cold start, never on suspend/resume.
+  if [ "${rel}" = "lib/plugins" ] || [ "${rel}" = "lib/tpl" ]; then
+    for imgentry in "${src}"/*; do
+      [ -e "${imgentry}" ] || continue
+      name="$(basename "${imgentry}")"
+      rm -rf "${dst}/${name}"
+      cp -a "${imgentry}" "${dst}/${name}"
+      chown -R www-data:www-data "${dst}/${name}"
     done
   fi
 

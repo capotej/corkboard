@@ -19,7 +19,6 @@ survives restarts and redeployments.
 | `fly.toml`                 | Fly app config, HTTP service on :80, volume mount, VM sizing        |
 | `conf-seed/`               | Locked-down config templates (closed ACL, `useacl`, no self-registration, JSON-RPC enabled) |
 | `bootstrap-user.php`       | Creates the **admin** and **agent** accounts from Fly secrets (bcrypt, idempotent) |
-| `test-api.sh`              | Confirms the agent can authenticate to the JSON-RPC API (`core.whoAmI`) |
 | `apache-deny-sensitive.conf` | Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/`        |
 | `dokuwiki-opcache.ini`     | Enables + sizes PHP OPcache (preload disabled — see cold-start notes) |
 | `.dockerignore`            | Keeps build context lean                                            |
@@ -84,8 +83,9 @@ have sensible defaults (`admin`/`Administrator`/`agent`/`API Agent`/
    later edits):
    - `conf/acl.auth.php` → `@ALL 0`, `@user 8` (login required to read & write)
    - `conf/local.protected.php` → `useacl=1`, `superuser=@admin`,
-     `disableactions=register,resendpwd` (no self-registration / resets), and
-     `remote=1` + `remoteuser=@api,@admin` (enables the JSON-RPC API)
+     `disableactions=register,resendpwd` (no self-registration / resets),
+     `remote=1` + `remoteuser=@api,@admin` (enables the JSON-RPC API), and
+     `updatecheck=0` (no phone-home update/popularity checks)
    - `conf/local.php` → title + language
    - `conf/plugins.local.php` → disables the bundled `popularity`,
      `authpdo`, `authldap`, and `authad` plugins (anonymous-stats + unused
@@ -157,27 +157,21 @@ existing instance, add the agent via **Admin → User Manager** (put it in the
 ### Confirm it works
 
 `core.whoAmI` returns the authenticated identity and errors when
-unauthenticated, so it's the ideal probe. Run the bundled check:
-
-```bash
-AGENT_PASS='<the DOKU_AGENT_PASSWORD value>' ./test-api.sh https://<app>.fly.dev
-```
-
-A passing run prints:
-
-```json
-{"jsonrpc":"2.0","result":{"login":"agent","name":"API Agent",
- "mail":"agent@localhost","groups":["user","api"],
- "isadmin":false,"ismanager":false},"id":1}
-```
-…followed by `PASS: 'agent' authenticated and is in the 'api' group.`
-
-Equivalent one-liner:
+unauthenticated, so it's the ideal probe:
 
 ```bash
 curl -s -u "agent:$AGENT_PASS" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"core.whoAmI","id":1}' \
   https://<app>.fly.dev/lib/exe/jsonrpc.php
+```
+
+A successful call returns the authenticated user — confirming the credentials
+work and that the account is in the `api` group the API is restricted to:
+
+```json
+{"jsonrpc":"2.0","result":{"login":"agent","name":"API Agent",
+ "mail":"agent@localhost","groups":["user","api"],
+ "isadmin":false,"ismanager":false},"id":1}
 ```
 
 ### Reading / writing pages
@@ -224,11 +218,20 @@ others.) User edits made via the web UI (Configuration Manager, ACL Manager,
 User Manager) write to `local.php` / `acl.auth.php` / `users.auth.php`, which
 are persisted, so they survive redeploys.
 
+`lib/plugins/` and `lib/tpl/` get the same treatment for their **bundled**
+entries: each boot the entries that ship with the release (the `config`,
+`authldap`, `usermanager`, … plugins; the `doku` template, …) are refreshed
+from the image so they track the running version, while entries present on the
+volume but *not* in the image — i.e. plugins/templates you installed via the
+Extension Manager — are left untouched and persist.
+
 This means: **upgrading DokuWiki = rebuild + redeploy**. Your content, user
-config, plugins and templates on the volume are untouched; only the core code
-(and the release-default config files) are replaced. Plugins under
-`lib/plugins/` are also on the volume, so they persist too (but you may want
-to re-check plugin compatibility after a major upgrade).
+config, and **user-installed** plugins/templates on the volume are untouched;
+only the core code, the release-default config files, and the **bundled**
+plugins/templates are replaced (refreshed from the new image). Third-party
+plugins you installed via the Extension Manager persist, so after a major
+upgrade you may want to re-check *their* compatibility — the bundled ones stay
+in sync with the running release automatically.
 
 ## Suspend/resume & cold-start optimization
 
@@ -310,7 +313,10 @@ fly ssh sftp get /dokuwiki-persistent/data ./dokuwiki-data-backup
 - **Region:** change `primary_region` in `fly.toml` (e.g. `sin`, `fra`, `sjc`).
 - **Always-on:** set `min_machines_running = 1` in `[http_service]`.
 - **Larger wiki:** bump VM `memory` / `size`, or `fly volumes extend dokuwiki_data --size 5`.
-- **Bigger DokuWiki version:** change `DOKUWIKI_VERSION` in the Dockerfile `ARG`.
+- **Bigger DokuWiki version:** change `DOKUWIKI_VERSION` in the Dockerfile `ARG`
+  **and** the pinned `DOKUWIKI_SHA256` (recompute with
+  `curl -sL <DOKUWIKI_URL> | sha256sum`). The download is always verified against
+  that checksum; a mismatch fails the build.
 - **Media uploads off for members:** in `conf-seed/acl.auth.php` change `@user 8`
   to `@user 4` (create = read+edit+create, no upload).
 - **Restrict the API further:** edit `$conf['remoteuser']` in

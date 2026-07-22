@@ -19,7 +19,9 @@
  * later (via User Manager) survive redeploys.
  */
 
-$usersFile = getenv('DOKU_USERS_FILE') ?: '/var/www/html/conf/users.auth.php';
+// users.auth.php lives on the persistent volume, symlinked into place by
+// entrypoint.sh before this runs (/var/www/html/conf -> /dokuwiki-persistent/conf).
+$usersFile = '/var/www/html/conf/users.auth.php';
 
 $accounts = [
     [

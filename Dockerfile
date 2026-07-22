@@ -7,6 +7,12 @@ FROM php:8.5.8-apache
 # DokuWiki release to install
 ARG DOKUWIKI_VERSION=2026-07-14
 ARG DOKUWIKI_URL=https://download.dokuwiki.org/src/dokuwiki/dokuwiki-${DOKUWIKI_VERSION}.tgz
+# SHA-256 of the .tgz, pinned to DOKUWIKI_VERSION. The download is ALWAYS
+# verified against this - a mismatch fails the build. When you bump
+# DOKUWIKI_VERSION, also update this hash (recompute with
+# `curl -sL <DOKUWIKI_URL> | sha256sum`), or override at build time with
+# --build-arg DOKUWIKI_SHA256=<sha>.
+ARG DOKUWIKI_SHA256=278b08417a1f4ff843227f71ba88b22bec458f67f1c5cd2ba0c313b1d34f7ca7
 
 # PHP extensions DokuWiki relies on (gd for image resizing, intl for better
 # Unicode handling, zip for archive uploads, mbstring for multibyte strings).
@@ -27,6 +33,8 @@ RUN a2enmod rewrite headers expires
 RUN set -eux; \
     rm -rf /var/www/html/*; \
     wget -qO /tmp/dokuwiki.tgz "${DOKUWIKI_URL}"; \
+    # Always verify the download against the pinned checksum; fails on mismatch.
+    echo "${DOKUWIKI_SHA256}  /tmp/dokuwiki.tgz" | sha256sum -c -; \
     # The archive extracts to a single top-level dir (dokuwiki/); strip it.
     tar -xzf /tmp/dokuwiki.tgz -C /var/www/html --strip-components=1; \
     rm /tmp/dokuwiki.tgz
