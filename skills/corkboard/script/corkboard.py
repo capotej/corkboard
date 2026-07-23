@@ -29,6 +29,7 @@ Examples:
   corkboard.py delete ns:page                           # clear page content (update)
   corkboard.py list ns                                  # pages (recursive)
   corkboard.py all                                      # every page
+  corkboard.py sitemap                                  # page tree (one call)
   corkboard.py search "full text"                       # full-text search
   corkboard.py media-upload diagram.png ns diag.png     # upload (binary or text)
   corkboard.py media-get ns:diag.png -o diag.png        # download
@@ -223,6 +224,156 @@ def cmd_media_orphans(ns):
         print(mid)
 
 
+# ------------------------------------------------------------------- sitemap
+def _build_tree(page_list):
+    """Build a nested {pages:{}, ns:{}} tree from core.listPages results.
+    Each leaf page -> {id, title, full}; intermediate components become namespaces.
+    `id` is the (prefix-stripped) id used for nesting/display; `full` is the
+    original wiki id, used to decide index/start markers across scoping."""
+    root = {"pages": {}, "ns": {}}
+    for p in page_list:
+        pid = p.get("id") if isinstance(p, dict) else p
+        full = p.get("full", pid) if isinstance(p, dict) else p
+        title = (p.get("title") if isinstance(p, dict) else "") or ""
+        parts = pid.split(":")
+        node = root
+        for i, part in enumerate(parts):
+            if i == len(parts) - 1:
+                node["pages"][part] = {"id": pid, "title": title, "full": full}
+            else:
+                node = node["ns"].setdefault(part, {"pages": {}, "ns": {}})
+    return root
+
+
+def _annotate(node):
+    """Store recursive descendant page count on every node (node['count'])."""
+    node["count"] = len(node["pages"]) + sum(_annotate(c) for c in node["ns"].values())
+    return node["count"]
+
+
+def _page_title(info, name):
+    """A display title, or '' if missing / equal to the id, full id, or leaf name.
+    With `useheading` off, DokuWiki returns title == the full page id, so compare
+    against all of those to avoid echoing the id back as a fake title."""
+    t = (info or {}).get("title", "")
+    if not t:
+        return ""
+    if t in (info.get("id", ""), info.get("full", ""), name):
+        return ""
+    return t
+
+
+def _is_index_page(name, info):
+    """True for a namespace's index/start landing page — one named index/start
+    that lives INSIDE a namespace (original full id has a colon). The wiki-root
+    `start` (site homepage, no colon) is intentionally not marked."""
+    if name not in ("index", "start"):
+        return False
+    full = (info or {}).get("full") or (info or {}).get("id", "")
+    return ":" in full
+
+
+def _tree_sort_key(entry):
+    kind, name, _ = entry
+    # float each namespace's index/start landing page to the top of its group
+    return (0 if (kind == "page" and name in ("index", "start")) else 1, name)
+
+
+def _emit_tree(node, lines, prefix, depth, level, system, scoped):
+    """Append a box-drawing tree of node's children to `lines`.
+
+    depth None = full tree; depth N collapses anything deeper than N levels.
+    The top-level `wiki:` namespace is always collapsed in the whole-wiki view
+    (it's DokuWiki's built-in docs); scope in with --ns wiki to expand it."""
+    entries = ([("ns", n, c) for n, c in node["ns"].items()] +
+               [("page", n, info) for n, info in node["pages"].items()])
+    entries.sort(key=_tree_sort_key)
+    for idx, (kind, name, data) in enumerate(entries):
+        last = idx == len(entries) - 1
+        connector = "└── " if last else "├── "
+        child_prefix = prefix + ("    " if last else "│   ")
+        if kind == "page":
+            is_idx = _is_index_page(name, data)
+            seg = name + (" *" if is_idx else "")
+            t = _page_title(data, name)
+            if t:
+                seg += f'  "{t}"'
+            if system:
+                seg += "  [system]"
+            lines.append(prefix + connector + seg)
+        else:  # namespace
+            count = data["count"]
+            is_system_ns = system or (name == "wiki" and level == 1)
+            collapse_system = name == "wiki" and level == 1 and not scoped
+            will_recurse = (depth is None or level < depth) and not collapse_system
+            tag = "  [system]" if is_system_ns else ""
+            lines.append(f"{prefix}{connector}{name}/ — {count} pages{tag}")
+            if will_recurse:
+                _emit_tree(data, lines, child_prefix, depth, level + 1, is_system_ns, scoped)
+
+
+def _to_json(node, system=False):
+    """Nested JSON tree: {pages, namespace_pages[], namespaces[]} per node."""
+    return {
+        "pages": node["count"],
+        "namespace_pages": [
+            {"id": info["id"], "title": info["title"],
+             "is_index": _is_index_page(name, info)}
+            for name, info in sorted(node["pages"].items())
+        ],
+        "namespaces": [
+            {"name": name, **_to_json(child, system=system or name == "wiki")}
+            for name, child in sorted(node["ns"].items())
+        ],
+    }
+
+
+def cmd_sitemap(ns, depth, as_json):
+    """One-call page tree (core.listPages) for orientation + placement.
+
+    Enriched ASCII tree by default: per-namespace page counts, page titles
+    (when present), index/start markers, and [system] for the wiki: namespace.
+    --depth N collapses deep subtrees into counts; --json emits structured data.
+    """
+    ns = (ns or "").strip().rstrip(":")
+    if depth == 0:
+        depth = None
+    raw = rpc("core.listPages", [ns, 0]) or []
+    if not raw:
+        print("(no pages)" if not ns else f"(no pages in {ns}:)")
+        return
+    # core.listPages returns FULL ids (e.g. reports:2024:q1) even when scoped,
+    # so strip the namespace prefix to root the tree AT the scoped namespace.
+    # Keep the original full id too (it drives index/start marking under scoping).
+    pfx = f"{ns}:" if ns else ""
+    pages = []
+    for p in raw:
+        if isinstance(p, dict):
+            pid = p.get("id", "")
+            np = dict(p)
+            np["full"] = pid
+            np["id"] = pid[len(pfx):] if (pfx and pid.startswith(pfx)) else pid
+            pages.append(np)
+        else:
+            pages.append({"id": p[len(pfx):] if (pfx and p.startswith(pfx)) else p,
+                          "full": p, "title": ""})
+    root = _build_tree(pages)
+    _annotate(root)
+    system = ns == "wiki" or ns.startswith("wiki:")
+    if as_json:
+        out = {"root": ns, "total_pages": root["count"], "tree": _to_json(root, system=system)}
+        print(json.dumps(out, indent=2))
+        return
+    label = f"({ns}:)" if ns else "(root)"
+    lines = [f"{label} — {root['count']} pages"]
+    _emit_tree(root, lines, "", depth, 1, system, bool(ns))
+    if system or "wiki" in root["ns"]:
+        lines.append("(* = namespace index/start page; [system] = DokuWiki built-in pages)")
+    else:
+        lines.append("(* = namespace index/start page)")
+    print("\n".join(lines))
+
+
 # ------------------------------------------------------------------- subcommands
 def _read_input(args):
     if args.file:
@@ -281,6 +432,11 @@ def main():
     bl = sp.add_parser("backlinks", help="pages linking TO a page")
     bl.add_argument("page")
 
+    sm = sp.add_parser("sitemap", help="page tree in ONE call (core.listPages) — bird's-eye view + placement")
+    sm.add_argument("--ns", default="", help="scope to a namespace")
+    sm.add_argument("--depth", type=int, default=0, help="0 = full tree (default); N = collapse beyond N levels")
+    sm.add_argument("--json", dest="as_json", action="store_true", help="emit nested JSON instead of an ASCII tree")
+
     raw = sp.add_parser("raw", help="escape hatch: call any JSON-RPC method")
     raw.add_argument("method"); raw.add_argument("params", help="JSON array of params", nargs="?", default="[]")
 
@@ -332,6 +488,8 @@ def main():
         cmd_links(args.page)
     elif args.cmd == "backlinks":
         cmd_backlinks(args.page)
+    elif args.cmd == "sitemap":
+        cmd_sitemap(args.ns, args.depth, args.as_json)
     elif args.cmd == "raw":
         try:
             params = json.loads(args.params)

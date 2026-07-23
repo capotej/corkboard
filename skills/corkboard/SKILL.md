@@ -96,6 +96,7 @@ skill dir: `<skill>/script/corkboard.py`.
 | `delete <page>` | **clear** page content (an update) | `core.savePage` w/ `""` |
 | `list <ns> [--depth N]` | page ids (recursive; `--depth N`) | `core.listPages` |
 | `all` | every page id | `core.listPages("", 0)` |
+| `sitemap [--ns X] [--depth N] [--json]` | **page tree** (one call) — bird's-eye view for orientation & placement | `core.listPages` |
 | `search <query>` | full-text search | `core.searchPages` |
 | `version` | DokuWiki version | `core.getWikiVersion` |
 | `media-upload <file> <ns> <name> [--no-overwrite]` | **upload binary or text** | `core.saveMedia` |
@@ -122,6 +123,41 @@ python3 script/corkboard.py media-get reports:chart.png -o chart.png
 `core.saveMedia`. It **overwrites by default** (`--no-overwrite` to require a
 fresh id). Media ids are `<ns>:<name>` (or just `<name>` for the root ns).
 `list` is **recursive by default** (`--depth 0`); `--depth N` descends N levels.
+
+## Orientation: `sitemap` before you place a page
+
+Before deciding where a new page belongs (or just to see the wiki at a glance),
+run `sitemap` — it issues **one `core.listPages` call** and renders an ASCII
+**tree** of namespaces with per-namespace page counts, page titles (when set),
+`*` on each namespace's `index`/`start` landing page, and `[system]` on the
+built-in `wiki:` docs:
+
+```bash
+python3 script/corkboard.py sitemap                 # full tree
+python3 script/corkboard.py sitemap --depth 1       # bird's-eye: top level only
+python3 script/corkboard.py sitemap --ns reports    # expand one subtree
+python3 script/corkboard.py sitemap --json          # structured nested tree
+```
+
+```
+(root) — 9 pages
+├── start  "Welcome to the Wiki"
+├── playground/ — 1 pages
+│   └── notes
+├── reports/ — 4 pages
+│   ├── index *  "Reports"
+│   ├── 2024/ — 2 pages
+│   │   ├── q1  "Q1 Summary"
+│   │   └── q2  "Q2 Summary"
+│   └── archive/ — 1 pages
+│       └── old  "Legacy Reports"
+└── wiki/ — 2 pages  [system]
+(* = namespace index/start page; [system] = DokuWiki built-in pages)
+```
+
+Prefer `sitemap` for orientation and placement; reach for flat `list`/`all`
+when you just need the raw id list to loop over. `--depth 1` is the compact
+"what namespaces exist and how big is each?" view for big wikis.
 
 ## Media upload
 
