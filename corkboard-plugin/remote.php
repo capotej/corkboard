@@ -61,7 +61,10 @@ class remote_plugin_corkboard extends RemotePlugin
         unset($srcs);
 
         ksort($wanted);
-        return $wanted;
+        // Cast to object so an empty result serializes as {} (object), matching the
+        // non-empty {target_id: [source_pages]} shape — a plain empty array would
+        // JSON-encode as [] (list), making the return type inconsistent.
+        return (object) $wanted;
     }
 
     /**
