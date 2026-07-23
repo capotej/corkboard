@@ -3,8 +3,8 @@
 # This repo is meant to be cloned, renamed, and deployed:
 #   1. Clone it:   git clone <url> <your-app-name>
 #   2. Edit `app = "..."` below to a globally-unique name -> https://<app>.fly.dev
-#   3. Set the required admin secret:
-#        fly secrets set DOKU_ADMIN_PASSWORD='...' -a <app>
+#   3. Set the two required secrets (admin + agent):
+#        fly secrets set CORKBOARD_ADMIN_PASS='...' CORKBOARD_AGENT_PASS='...' -a <app>
 #   4. fly deploy
 #
 # See https://fly.io/docs/reference/configuration/ for the full schema.

@@ -46,8 +46,8 @@ COPY corkboard-plugin/ /var/www/html/lib/plugins/corkboard/
 
 # Locked-down config templates. The image's conf/ stays pristine at build
 # time; entrypoint.sh always writes these into the volume's conf/ (the wiki
-# ships closed by default). DOKU_ADMIN_PASSWORD (a Fly secret) is required —
-# the entrypoint fails fast if it's missing.
+# ships closed by default). CORKBOARD_ADMIN_PASS and CORKBOARD_AGENT_PASS (Fly
+# secrets) are both required — the entrypoint fails fast if either is missing.
 COPY conf-seed/ /usr/local/share/dokuwiki-seed/
 
 # Defense-in-depth: block direct HTTP access to data/conf/bin/inc regardless

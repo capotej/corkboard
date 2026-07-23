@@ -119,19 +119,22 @@ done
 # cost (~20s on a shared-cpu-1x). The symlink targets on the volume are already
 # www-data-owned, so nothing here needs re-chowning.
 
-# --- Closed-wiki defaults + admin bootstrap (default) -------------------
+# --- Closed-wiki defaults + admin/agent bootstrap (default) -------------
 # The lockdown config (closed ACL, useacl, no self-registration, JSON-RPC API,
 # unused plugins off, no phone-home) is ALWAYS applied — the wiki ships closed
-# by default. The admin account's password can't be baked into the image (it
-# would leak via git + `docker history`), so DOKU_ADMIN_PASSWORD must be
-# supplied as a Fly secret. If it's missing we fail fast with a clear error
-# rather than coming up as an open wiki.
-if [ -z "${DOKU_ADMIN_PASSWORD:-}" ]; then
-  echo "[entrypoint] FATAL: DOKU_ADMIN_PASSWORD is not set." >&2
-  echo "[entrypoint] The wiki ships closed by default and the admin password can't" >&2
-  echo "[entrypoint] be baked into the image, so it must be provided as a secret." >&2
-  echo "[entrypoint] Set it before first boot:" >&2
-  echo "[entrypoint]   fly secrets set DOKU_ADMIN_PASSWORD='choose-a-password' -a <app>" >&2
+# by default. Both account passwords can't be baked into the image (they'd leak
+# via git + `docker history`), so CORKBOARD_ADMIN_PASS and CORKBOARD_AGENT_PASS
+# must BOTH be supplied as Fly secrets — the agent is required (this is an
+# agentic wiki). If either is missing we fail fast with a clear error rather
+# than coming up as an open wiki.
+missing=""
+[ -n "${CORKBOARD_ADMIN_PASS:-}" ] || missing="${missing} CORKBOARD_ADMIN_PASS"
+[ -n "${CORKBOARD_AGENT_PASS:-}" ] || missing="${missing} CORKBOARD_AGENT_PASS"
+if [ -n "${missing}" ]; then
+  echo "[entrypoint] FATAL: required secret(s) not set:${missing}." >&2
+  echo "[entrypoint] The wiki ships closed by default and needs both an admin and an" >&2
+  echo "[entrypoint] agent password (the agent is required). Set both before first boot:" >&2
+  echo "[entrypoint]   fly secrets set CORKBOARD_ADMIN_PASS='...' CORKBOARD_AGENT_PASS='...' -a <app>" >&2
   exit 1
 fi
 
@@ -154,11 +157,11 @@ for f in local.php acl.auth.php mime.local.conf plugins.local.php; do
 done
 
 # Create accounts (idempotent — won't clobber existing users, so later password
-# changes survive redeploys). bootstrap-user.php creates the admin (always) and
-# the agent when DOKU_AGENT_PASSWORD is set. On a normal Fly resume every
-# expected account already exists, so we skip spawning PHP entirely — one fewer
-# PHP CLI cold-start per boot. If any expected account is missing we fall back
-# to the idempotent bootstrap (which chowns its own output).
+# changes survive redeploys). Both admin and agent are always created (usernames
+# hardcoded admin/agent; the agent is required). On a normal Fly resume both
+# accounts already exist, so we skip spawning PHP entirely — one fewer PHP CLI
+# cold-start per boot. If either is missing we fall back to the idempotent
+# bootstrap (which chowns its own output).
 USERS_FILE="${PERSIST}/conf/users.auth.php"
 need_bootstrap=0
 # Literal first-field match via awk: a username like "a.b" must not be
@@ -166,12 +169,8 @@ need_bootstrap=0
 # causes a redundant bootstrap-user.php run — which re-checks with strict ===
 # — but this is correct regardless.)
 user_present() { [ -f "${USERS_FILE}" ] && awk -F: -v u="$1" '$1==u {f=1} END{exit !f}' "${USERS_FILE}"; }
-ADMIN_USER="${DOKU_ADMIN_USER:-admin}"
-AGENT_USER="${DOKU_AGENT_USER:-agent}"
-user_present "${ADMIN_USER}" || need_bootstrap=1
-if [ -n "${DOKU_AGENT_PASSWORD:-}" ]; then
-  user_present "${AGENT_USER}" || need_bootstrap=1
-fi
+user_present admin || need_bootstrap=1
+user_present agent || need_bootstrap=1
 if [ "${need_bootstrap}" = "1" ]; then
   php /usr/local/bin/bootstrap-user.php
 else
@@ -186,28 +185,26 @@ fi
 # bootstrapped from the secret), so remove it.
 rm -f "${WEBROOT}/install.php"
 if [ "${need_bootstrap}" = "1" ]; then
-  echo "[entrypoint] closed-wiki defaults applied; users bootstrapped (admin always; agent if DOKU_AGENT_PASSWORD set)."
+  echo "[entrypoint] closed-wiki defaults applied; admin + agent bootstrapped."
 else
   echo "[entrypoint] closed-wiki defaults applied; existing users left untouched."
 fi
 
 # Non-blocking JSON-RPC self-test: wait for Apache, then prove the agent can
-# authenticate against the API. The result is printed to stdout (visible via
-# `fly logs`). Backgrounded so it never blocks or breaks startup.
-if [ -n "${DOKU_AGENT_PASSWORD:-}" ]; then
-  (
-    set +e
-    agent="${DOKU_AGENT_USER:-agent}"
-    for _ in $(seq 1 30); do
-      curl -sf -o /dev/null "http://127.0.0.1/" && break
-      sleep 1
-    done
-    resp=$(curl -s -u "${agent}:${DOKU_AGENT_PASSWORD}" \
-      -H 'Content-Type: application/json' \
-      -d '{"jsonrpc":"2.0","method":"core.whoAmI","id":1}' \
-      http://127.0.0.1/lib/exe/jsonrpc.php 2>/dev/null || echo '(request failed)')
-    echo "[entrypoint] JSON-RPC self-test as '${agent}': ${resp}"
-  ) &
-fi
+# authenticate against the API. The agent is always provisioned, so this always
+# runs. Printed to stdout (visible via `fly logs`), backgrounded so it never
+# blocks or breaks startup.
+(
+  set +e
+  for _ in $(seq 1 30); do
+    curl -sf -o /dev/null "http://127.0.0.1/" && break
+    sleep 1
+  done
+  resp=$(curl -s -u "agent:${CORKBOARD_AGENT_PASS}" \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"core.whoAmI","id":1}' \
+    http://127.0.0.1/lib/exe/jsonrpc.php 2>/dev/null || echo '(request failed)')
+  echo "[entrypoint] JSON-RPC self-test as 'agent': ${resp}") &
+
 
 exec "$@"

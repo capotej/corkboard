@@ -2,21 +2,20 @@
 /**
  * bootstrap-user.php
  *
- * Creates the initial DokuWiki user accounts from environment variables.
- * Run by entrypoint.sh inside the locked-down (DOKU_ADMIN_PASSWORD) branch.
+ * Creates the initial DokuWiki user accounts from Fly secrets. Run by
+ * entrypoint.sh after it has fail-fast-checked that BOTH secrets are present.
  *
- *   Admin  : DOKU_ADMIN_USER (admin) / DOKU_ADMIN_PASSWORD (required to reach
- *            this code) / DOKU_ADMIN_NAME (Administrator) / DOKU_ADMIN_EMAIL
- *            groups: admin,user        -> superuser via @admin
+ *   Admin  : CORKBOARD_ADMIN_PASS (required) — username `admin`, groups admin,user
+ *            (superuser via @admin)
  *
- *   Agent  : DOKU_AGENT_USER (agent) / DOKU_AGENT_PASSWORD (optional) /
- *            DOKU_AGENT_NAME (API Agent) / DOKU_AGENT_EMAIL
- *            groups: user,api          -> read/write pages (@user ACL) AND
- *                                          JSON-RPC API access via the @api group
+ *   Agent  : CORKBOARD_AGENT_PASS (required) — username `agent`, groups user,api
+ *            (read/write pages via the @user ACL AND JSON-RPC API access via @api)
  *
- * Passwords are hashed with PHP's native bcrypt ($2y$), DokuWiki's default
- * passcrypt. Existing users are never overwritten, so password changes made
- * later (via User Manager) survive redeploys.
+ * Usernames, display names, and emails are hardcoded (admin/administrator/
+ * admin@localhost and agent/API Agent/agent@localhost) — the only per-instance
+ * inputs are the two passwords. Passwords are hashed with PHP's native bcrypt
+ * ($2y$), DokuWiki's default passcrypt. Existing users are never overwritten,
+ * so password changes made later (via User Manager) survive redeploys.
  */
 
 // users.auth.php lives on the persistent volume, symlinked into place by
@@ -25,18 +24,18 @@ $usersFile = '/var/www/html/conf/users.auth.php';
 
 $accounts = [
     [
-        'pass_var'     => 'DOKU_ADMIN_PASSWORD',
-        'user_var'     => 'DOKU_ADMIN_USER', 'user_default' => 'admin',
-        'name_var'     => 'DOKU_ADMIN_NAME', 'name_default' => 'Administrator',
-        'mail_var'     => 'DOKU_ADMIN_EMAIL',
-        'groups'       => 'admin,user',
+        'pass_var' => 'CORKBOARD_ADMIN_PASS',
+        'user'     => 'admin',
+        'name'     => 'Administrator',
+        'mail'     => 'admin@localhost',
+        'groups'   => 'admin,user',
     ],
     [
-        'pass_var'     => 'DOKU_AGENT_PASSWORD',
-        'user_var'     => 'DOKU_AGENT_USER', 'user_default' => 'agent',
-        'name_var'     => 'DOKU_AGENT_NAME', 'name_default' => 'API Agent',
-        'mail_var'     => 'DOKU_AGENT_EMAIL',
-        'groups'       => 'user,api',
+        'pass_var' => 'CORKBOARD_AGENT_PASS',
+        'user'     => 'agent',
+        'name'     => 'API Agent',
+        'mail'     => 'agent@localhost',
+        'groups'   => 'user,api',
     ],
 ];
 
@@ -63,9 +62,10 @@ function user_exists(array $lines, $user)
 $changed = false;
 
 foreach ($accounts as $acct) {
-    $user = getenv($acct['user_var']) ?: $acct['user_default'];
+    $user = $acct['user'];
     $pass = getenv($acct['pass_var']) ?: '';
 
+    // entrypoint.sh fail-fasts on empty secrets, so this is defensive only.
     if ($pass === '') {
         fwrite(STDERR, "bootstrap-user: {$acct['pass_var']} is empty; skipping '{$user}'.\n");
         continue;
@@ -76,9 +76,9 @@ foreach ($accounts as $acct) {
         continue;
     }
 
-    $name  = getenv($acct['name_var']) ?: $acct['name_default'];
-    $mail  = getenv($acct['mail_var']) ?: ($user . '@localhost');
-    $hash  = password_hash($pass, PASSWORD_BCRYPT);
+    $name   = $acct['name'];
+    $mail   = $acct['mail'];
+    $hash   = password_hash($pass, PASSWORD_BCRYPT);
     $record = implode(':', [$user, $hash, $name, $mail, $acct['groups']]);
 
     // HTTP access to conf/ is denied by Apache, so the file is never served.

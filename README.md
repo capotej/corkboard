@@ -73,10 +73,10 @@ fly launch --no-deploy
 #    primary region, but pass --region explicitly to be safe:
 fly volumes create dokuwiki_data --size 1 --region iad
 
-# 5. Set the REQUIRED admin secret, and (to enable the agent) the agent secret:
+# 5. Set the two REQUIRED secrets (admin + agent — the agent is mandatory):
 fly secrets set \
-  DOKU_ADMIN_PASSWORD='choose-a-strong-password' \
-  DOKU_AGENT_PASSWORD='choose-another-password' \
+  CORKBOARD_ADMIN_PASS='choose-a-strong-password' \
+  CORKBOARD_AGENT_PASS='choose-another-password' \
   -a my-corkboard
 
 # 6. Deploy
@@ -93,16 +93,15 @@ Your wiki is live at `https://my-corkboard.fly.dev`.
 
 ### Secrets reference
 
-| Secret                | Required | Default            | Purpose |
-| --------------------- | -------- | ------------------ | ------- |
-| `DOKU_ADMIN_PASSWORD` | **yes**  | —                  | Admin password; also gates first-boot lockdown. Without it the container exits (`FATAL: DOKU_ADMIN_PASSWORD is not set`). |
-| `DOKU_ADMIN_USER`     | no       | `admin`            | Admin username |
-| `DOKU_ADMIN_NAME`     | no       | `Administrator`    | Admin display name |
-| `DOKU_ADMIN_EMAIL`    | no       | `<user>@localhost` | Admin email |
-| `DOKU_AGENT_PASSWORD` | no\*     | —                  | Agent password. \*Set this to enable the agent + API. |
-| `DOKU_AGENT_USER`     | no       | `agent`            | Agent username |
-| `DOKU_AGENT_NAME`     | no       | `API Agent`        | Agent display name |
-| `DOKU_AGENT_EMAIL`    | no       | `<user>@localhost` | Agent email |
+| Secret                 | Required | Purpose |
+| ---------------------- | -------- | ------- |
+| `CORKBOARD_ADMIN_PASS` | **yes**  | Admin password — the `admin` account (superuser via `@admin`). |
+| `CORKBOARD_AGENT_PASS` | **yes**  | Agent password — the `agent` account (JSON-RPC API). The agent is mandatory; this is an agentic wiki. |
+
+If either is missing the container exits at boot with
+`FATAL: required secret(s) not set: …`. Everything else about the accounts is
+hardcoded — usernames (`admin`/`agent`), display names, and emails
+(`admin@localhost`/`agent@localhost`).
 
 The bootstrap is **idempotent**: redeploys never overwrite an existing user, so
 password changes you make in the UI survive.
@@ -177,8 +176,8 @@ every redeploy.
 ## The agent + the bundled skill
 
 The `agent` account (groups `user,api`) is the identity an agent uses to talk to
-the wiki over JSON-RPC. Provision it by setting `DOKU_AGENT_PASSWORD` (above); on
-first boot it's created in `conf/users.auth.php`. It has **read + update** but
+the wiki over JSON-RPC. It's created from the required `CORKBOARD_AGENT_PASS`
+secret on first boot in `conf/users.auth.php`. It has **read + update** but
 **not delete** (details in `skills/corkboard/SKILL.md`).
 
 ### `skills/corkboard/` — the agent transport
@@ -195,15 +194,15 @@ to the secrets you set at install time:**
 | Skill env var    | Set it to                                | = install secret                              |
 | ---------------- | ---------------------------------------- | --------------------------------------------- |
 | `CORKBOARD_URL`  | `https://<app>.fly.dev` (no trailing `/`)| (your deployed URL)                           |
-| `CORKBOARD_USER` | the agent username                       | `DOKU_AGENT_USER` (default `agent`)           |
-| `CORKBOARD_PASS` | the agent password                       | `DOKU_AGENT_PASSWORD`                         |
+| `CORKBOARD_USER` | the agent username                       | hardcoded `agent`                             |
+| `CORKBOARD_PASS` | the agent password                       | `CORKBOARD_AGENT_PASS`                        |
 
 So to let an agent use your wiki:
 
 ```bash
 export CORKBOARD_URL=https://my-corkboard.fly.dev
 export CORKBOARD_USER=agent
-export CORKBOARD_PASS='<the DOKU_AGENT_PASSWORD value>'
+export CORKBOARD_PASS='<the CORKBOARD_AGENT_PASS value>'
 
 python3 skills/corkboard/script/corkboard.py put notes:hello --text "Hello from the agent" --sum "first page"
 python3 skills/corkboard/script/corkboard.py get notes:hello
@@ -384,16 +383,16 @@ fly ssh sftp get /dokuwiki-persistent/data ./corkboard-backup
 - **Volume in the wrong region / "no volume in region"** — recreate the volume in
   the same region as `primary_region` (`fly volumes create dokuwiki_data --size 1
   --region <primary_region>`). A machine can only mount a volume in its own region.
-- **Container exits / won't start** — `DOKU_ADMIN_PASSWORD` is required. If it's
-  unset the entrypoint prints `FATAL: DOKU_ADMIN_PASSWORD is not set.` and exits.
-  Set it and redeploy.
-- **Can't log in** — confirm `DOKU_ADMIN_PASSWORD` was set before first boot
+- **Container exits / won't start** — both `CORKBOARD_ADMIN_PASS` and
+  `CORKBOARD_AGENT_PASS` are required. If either is unset the entrypoint prints
+  `FATAL: required secret(s) not set: …` and exits. Set both and redeploy.
+- **Can't log in** — confirm `CORKBOARD_ADMIN_PASS` was set before first boot
   (`fly secrets list -a <app>`). If the volume was seeded without it, set the
   secret and reset the volume (or add the user via `fly ssh console`).
-- **Agent can't authenticate / API `403`** — `DOKU_AGENT_PASSWORD` provisions the
+- **Agent can't authenticate / API `403`** — `CORKBOARD_AGENT_PASS` provisions the
   `agent`; `remote=1` / `remoteuser=@api,@admin` live in `local.protected.php`
-  (re-synced every boot). Make sure `CORKBOARD_USER` / `CORKBOARD_PASS` match the
-  agent's username/password.
+  (re-synced every boot). Make sure `CORKBOARD_USER` (`agent`) / `CORKBOARD_PASS`
+  match the agent's username/password.
 - **Permission errors / "not writable"** — Apache runs as `www-data`; if you
   override the image, keep that user and the webroot ownership.
 - **Lost data after deploy** — confirm the volume is attached
