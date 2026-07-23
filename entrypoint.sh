@@ -88,7 +88,7 @@ for rel in ${PERSIST_DIRS}; do
   fi
 
   # lib/plugins and lib/tpl ship bundled entries WITH the release (config,
-  # authldap, usermanager, ... / the doku template, ...) AND also hold entries
+  # authldap, usermanager, ... / the `dokuwiki` template, ...) AND also hold entries
   # the user installs via the Extension Manager, which must persist. Refresh the
   # BUNDLED entries from the image each boot so they track the running DokuWiki
   # version — mirroring the conf/ release-default refresh above — while entries

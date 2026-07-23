@@ -31,7 +31,7 @@ primary_region = 'iad'
     interval = "10s"
     method = "GET"
     timeout = "2s"
-    path = "/"
+    path = "/lib/tpl/dokuwiki/images/favicon.ico"   # static asset (200); / 302s to login, and Fly checks need 2xx
 
 [[vm]]
   size = 'shared-cpu-1x'
