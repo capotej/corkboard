@@ -217,21 +217,84 @@ fatal `TypeError … ModeRegistry … null given`. The refresh fixes it.)
 
 ## Upgrading & re-seeding
 
-- **Upgrading DokuWiki = rebuild + redeploy.** Your content, user config, and
-  user-installed plugins/templates on the volume are untouched; only core code,
-  release-default config, and bundled plugins/templates are replaced. Bump
-  `DOKUWIKI_VERSION` in the Dockerfile **and** the pinned `DOKUWIKI_SHA256`
-  (recompute with `curl -sL <DOKUWIKI_URL> | sha256sum`).
-- **Re-applying seed defaults to an existing volume:** `local.protected.php`
-  re-syncs every boot, so lockdown changes apply on next deploy. The other seed
-  files are write-once; to force them back, edit the files under
-  `/dokuwiki-persistent/conf/` over SSH, or reset the volume:
+Upgrading = **bump two values in the Dockerfile, then `fly deploy`.** For an
+instance whose volume is already seeded, your content, users, ACLs, and config
+survive automatically — the entrypoint is built for this.
 
-  ```bash
-  fly volumes destroy <volume-id>      # LOSES content!
-  fly volumes create dokuwiki_data --size 1 --region iad
-  fly deploy
-  ```
+### Steps
+
+```dockerfile
+ARG DOKUWIKI_VERSION=2026-07-14a          # bump this
+ARG DOKUWIKI_SHA256=<recomputed sha256>    # AND this (the URL is derived from VERSION)
+```
+
+Recompute the hash from the new tarball, then redeploy:
+
+```bash
+curl -sL "https://download.dokuwiki.org/src/dokuwiki/dokuwiki-2026-07-14a.tgz" | sha256sum
+fly deploy
+```
+
+### What happens on the upgrade boot
+
+A new image invalidates Fly's suspend snapshot, so the next boot is a **cold
+start** and `entrypoint.sh` re-runs against the **existing** volume:
+
+| What | On a seeded volume at upgrade |
+| --- | --- |
+| `data/` (pages, media, attic, meta, cache) | Untouched — never refreshed. |
+| `conf/` release-defaults (`dokuwiki.php`, `*.conf`, `license.php`) | Refreshed from the new image. |
+| `conf/` user-managed (`local.php`, `acl.auth.php`, `users.auth.php`, `plugins.local.php`) | Preserved — title, ACLs, users, plugin-disables survive. |
+| `conf/local.protected.php` (lockdown) | Re-synced from `conf-seed/` every boot. |
+| `lib/plugins` + `lib/tpl` **bundled** entries | Refreshed from the new image. |
+| `lib/plugins` + `lib/tpl` **user-installed** entries | Preserved — see watch-outs. |
+| `admin` / `agent` accounts | Idempotent bootstrap sees they exist → skipped. |
+| Fly secrets | Live on the app, not the volume → unaffected. |
+
+So: new core code + new bundled plugins + new conf-defaults come from the image;
+everything you created or configured is carried over.
+
+### Watch-outs
+
+- **Third-party plugins/templates** installed via the Extension Manager persist
+  *as-is* — they are **not** upgraded and may not be compatible with the new
+  release. After deploy, re-check/update them in **Admin → Extension Manager**.
+  (Bundled ones always track the release.)
+- The **first request after deploy is a ~7 s cold start** (the new image
+  invalidates the suspend snapshot); it returns to ~0.7 s resume once idle.
+- Don't keep manual edits in the conf **release-default** files on the volume —
+  the refresh overwrites them. Edit the user-managed files (or `conf-seed/`)
+  instead.
+- **Point/security releases** (the `a`, `b` suffixes) are drop-in — no data
+  migration (DokuWiki is flat-file). A *major* release occasionally wants a
+  quick admin login, but there's no DB migration step.
+
+### Verify after deploy
+
+```bash
+fly logs    # look for "[entrypoint] JSON-RPC self-test ..." + the OPcache guard
+```
+
+Or, with the skill env vars exported (see
+[The agent + the bundled skill](#the-agent--the-bundled-skill)):
+
+```bash
+python3 skills/corkboard/script/corkboard.py version    # reports the running release
+```
+
+### Re-applying seed defaults to an existing volume
+
+`local.protected.php` re-syncs every boot, so lockdown changes in `conf-seed/`
+apply on the next deploy. The other seed files (`local.php`, `acl.auth.php`,
+`plugins.local.php`, `mime.local.conf`) are write-once; to force them back onto
+an existing volume, edit the files under `/dokuwiki-persistent/conf/` over SSH,
+or reset the volume:
+
+```bash
+fly volumes destroy <volume-id>      # LOSES content!
+fly volumes create dokuwiki_data --size 1 --region iad
+fly deploy
+```
 
 ## Suspend/resume & cold start
 
