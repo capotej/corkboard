@@ -5,13 +5,17 @@ instance, tuned for [Fly.io](https://fly.io), that's meant to be **read and
 written by an AI agent** through its built-in JSON-RPC API. Clone it, deploy it,
 point an agent at it.
 
-- **Flat-file** — no database; the whole wiki (pages, media, config) lives on one
-  persistent Fly **volume**, so it survives restarts and redeploys.
-- **Closed by default** — anonymous access is denied; an `admin` and an `agent`
-  account are auto-provisioned from Fly secrets on first boot.
-- **Agent-ready** — ships the **`corkboard` skill** (`skills/corkboard/`), a
-  stdlib-only Python client an agent uses to get/put pages and upload media.
-- **Tuned for Fly's suspend/resume** — ~0.7 s warm resume, ~7 s cold start.
+## Features
+
+What Corkboard ships with out of the box:
+
+- **Login-only (closed by default)** — anonymous access is denied (`@ALL 0`); reading or writing requires a login. No self-registration, no password resets.
+- **JSON-RPC API** — DokuWiki's Remote API is enabled and restricted to the `@api`/`@admin` groups, for programmatic read/write over HTTP Basic auth.
+- **All safe upload formats** — ~150 file types allowed (text, source code, data/config, archives, fonts, e-books, …); `html`/`htm` are blocked (XSS vector).
+- **Corkboard RPC plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that returns wanted/orphan pages and unreferenced media in a single call.
+- **Agent skill** — a stdlib-only Python client (`skills/corkboard/`) an agent uses to get/put pages and upload media over the API.
+- **No phone-home** — `updatecheck=0`; the `popularity` plugin is disabled.
+- **Flat-file on a Fly volume** — no database; survives restarts and redeploys; ~0.7 s warm resume, ~7 s cold start.
 
 ## What this is
 
