@@ -1,0 +1,5 @@
+# Dev toolchain for this repo.
+# PHP mirrors the Dockerfile base image (php:8.5.8-apache) so local `php -l`
+# and runs match production. Install with:  mise install
+[tools]
+php = "8.5.8"
