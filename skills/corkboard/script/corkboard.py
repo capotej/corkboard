@@ -150,34 +150,48 @@ def cmd_backlinks(page):
 
 def cmd_wanted():
     """Broken internal links: targets linked-to but not existing as pages."""
-    pages = _all_page_ids()
-    existing = set(pages)
-    wanted = {}
-    print(f"scanning {len(pages)} pages for broken links...", file=sys.stderr)
-    for src in pages:
-        for tgt in _local_targets(src):
-            if tgt not in existing:
-                wanted.setdefault(tgt, []).append(src)
-    if not wanted:
+    # Fast path: the Corkboard RPC plugin computes this server-side in one call.
+    try:
+        result = rpc("plugin.corkboard.wanted", [])
+    except SystemExit:
+        result = None
+    if result is None:
+        # Fallback: client-side walk (N getPageLinks calls) when the plugin is absent.
+        pages = _all_page_ids()
+        existing = set(pages)
+        result = {}
+        print(f"scanning {len(pages)} pages for broken links...", file=sys.stderr)
+        for src in pages:
+            for tgt in _local_targets(src):
+                if tgt not in existing:
+                    result.setdefault(tgt, []).append(src)
+    if not result:
         print("(no broken internal links)")
         return
-    for tgt in sorted(wanted):
+    for tgt in sorted(result):
         print(tgt)
-        for src in sorted(set(wanted[tgt])):
+        for src in sorted(set(result[tgt])):
             print(f"  <- {src}")
 
 
 def cmd_orphans():
     """Existing pages with no inbound links (entry points excluded)."""
-    pages = _all_page_ids()
-    print(f"scanning {len(pages)} pages for orphans...", file=sys.stderr)
-    found = []
-    for pid in pages:
-        if _is_entrypoint(pid):
-            continue
-        if not (rpc("core.getPageBackLinks", [pid]) or []):
-            found.append(pid)
-    for pid in sorted(found):
+    # Fast path: the Corkboard RPC plugin computes this server-side in one call.
+    try:
+        pids = rpc("plugin.corkboard.orphans", [])
+    except SystemExit:
+        pids = None
+    if pids is None:
+        # Fallback: client-side walk (N getPageBackLinks calls) when the plugin is absent.
+        pages = _all_page_ids()
+        print(f"scanning {len(pages)} pages for orphans...", file=sys.stderr)
+        pids = []
+        for pid in pages:
+            if _is_entrypoint(pid):
+                continue
+            if not (rpc("core.getPageBackLinks", [pid]) or []):
+                pids.append(pid)
+    for pid in sorted(p for p in pids if not _is_entrypoint(p)):
         print(pid)
 
 
@@ -189,15 +203,22 @@ def _is_system_media(mid):
 
 def cmd_media_orphans(ns):
     """Media files in a namespace not referenced from any page."""
-    media = [m.get("id") if isinstance(m, dict) else m
-             for m in (rpc("core.listMedia", [ns]) or [])]
-    print(f"scanning {len(media)} media files for usage...", file=sys.stderr)
-    found = []
-    for mid in media:
-        if _is_system_media(mid):
-            continue
-        if not (rpc("core.getMediaUsage", [mid]) or []):
-            found.append(mid)
+    # Fast path: the Corkboard RPC plugin computes this server-side in one call.
+    try:
+        found = rpc("plugin.corkboard.mediaorphans", [ns])
+    except SystemExit:
+        found = None
+    if found is None:
+        # Fallback: client-side walk (N getMediaUsage calls) when the plugin is absent.
+        media = [m.get("id") if isinstance(m, dict) else m
+                 for m in (rpc("core.listMedia", [ns]) or [])]
+        print(f"scanning {len(media)} media files for usage...", file=sys.stderr)
+        found = []
+        for mid in media:
+            if _is_system_media(mid):
+                continue
+            if not (rpc("core.getMediaUsage", [mid]) or []):
+                found.append(mid)
     for mid in sorted(found):
         print(mid)
 

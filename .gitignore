@@ -3,3 +3,7 @@ node_modules
 *.log
 .env
 .env.*
+
+# Python byte-compiled artifacts
+__pycache__/
+*.pyc

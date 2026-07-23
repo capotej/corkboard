@@ -37,6 +37,7 @@ directories onto that volume on every boot — see
 | `conf-seed/`                | Locked-down config templates: closed ACL, `useacl`, JSON-RPC, disabled plugins, broad upload allowlist |
 | `bootstrap-user.php`        | Creates the `admin` and `agent` accounts from Fly secrets (bcrypt, idempotent) |
 | `skills/corkboard/`         | The agent skill: a Python JSON-RPC client (`script/corkboard.py`) + `SKILL.md` |
+| `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): fast wanted/orphans/media-orphans for the agent |
 | `apache-deny-sensitive.conf`| Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/`              |
 | `dokuwiki-opcache.ini`      | Sizes PHP OPcache (preload disabled — see cold-start notes)             |
 | `.dockerignore`             | Keeps build context lean                                                 |
@@ -163,8 +164,8 @@ every redeploy.
 - a **DokuWiki upgrade** — bump `DOKUWIKI_VERSION` + `DOKUWIKI_SHA256` (see
   [Upgrading & re-seeding](#upgrading--re-seeding)); or
 - edits to **image-baked files** — the `Dockerfile`, anything in `conf-seed/`,
-  `entrypoint.sh`, `bootstrap-user.php`, `dokuwiki-opcache.ini`, or the
-  `corkboard` skill.
+  `entrypoint.sh`, `bootstrap-user.php`, `dokuwiki-opcache.ini`, the
+  `corkboard` skill, or the `corkboard-plugin/` RPC plugin.
 
 > **One exception — the lockdown.** `conf/local.protected.php` (the closed-ACL /
 > no-self-registration / JSON-RPC lockdown) is **re-synced from `conf-seed/` on

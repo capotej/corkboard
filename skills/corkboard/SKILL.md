@@ -166,6 +166,12 @@ python3 script/corkboard.py links <page>         # outgoing internal links from 
 python3 script/corkboard.py backlinks <page>     # pages linking TO a page
 ```
 
+> **Fast path on Corkboard wikis.** When the bundled **Corkboard RPC** plugin
+> (`plugin.corkboard.*`) is present, `wanted` / `orphans` / `media-orphans` are
+> computed **server-side in a single call** (against the search index) instead
+> of walking every page from the client. The helper falls back to the per-page
+> `core.*` walk automatically if the plugin isn't installed.
+
 `wanted` / `orphans` / `media-orphans` scan every page or media file (seconds to
 a minute on a small wiki) and print to stdout, with progress on stderr. Run them
 periodically and after big edits. **`media-orphans` is especially useful** since

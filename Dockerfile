@@ -39,6 +39,11 @@ RUN set -eux; \
     tar -xzf /tmp/dokuwiki.tgz -C /var/www/html --strip-components=1; \
     rm /tmp/dokuwiki.tgz
 
+# Corkboard RPC plugin: server-side RPC methods for the agent (today:
+# wanted/orphans/media-orphans in a single call). Ships as a bundled plugin in
+# lib/plugins/corkboard/ (the entrypoint refreshes bundled plugins each boot).
+COPY corkboard-plugin/ /var/www/html/lib/plugins/corkboard/
+
 # Locked-down config templates. The image's conf/ stays pristine at build
 # time; entrypoint.sh always writes these into the volume's conf/ (the wiki
 # ships closed by default). DOKU_ADMIN_PASSWORD (a Fly secret) is required —

@@ -1,0 +1,7 @@
+base   corkboard
+author Julio Capote
+email  6135+capotej@users.noreply.github.com
+date   2026-07-23
+name   Corkboard RPC
+desc   RPC methods for the Corkboard agent. Server-side wiki gardening (wanted pages, orphaned pages, unreferenced media) returned in a single call instead of N round-trips; intended to grow with more methods over time.
+url    https://www.dokuwiki.org/plugin:corkboard
