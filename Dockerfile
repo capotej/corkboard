@@ -5,14 +5,14 @@
 FROM php:8.5.8-apache
 
 # DokuWiki release to install
-ARG DOKUWIKI_VERSION=2026-07-14
+ARG DOKUWIKI_VERSION=2026-07-14a
 ARG DOKUWIKI_URL=https://download.dokuwiki.org/src/dokuwiki/dokuwiki-${DOKUWIKI_VERSION}.tgz
 # SHA-256 of the .tgz, pinned to DOKUWIKI_VERSION. The download is ALWAYS
 # verified against this - a mismatch fails the build. When you bump
 # DOKUWIKI_VERSION, also update this hash (recompute with
 # `curl -sL <DOKUWIKI_URL> | sha256sum`), or override at build time with
 # --build-arg DOKUWIKI_SHA256=<sha>.
-ARG DOKUWIKI_SHA256=278b08417a1f4ff843227f71ba88b22bec458f67f1c5cd2ba0c313b1d34f7ca7
+ARG DOKUWIKI_SHA256=88a4a37bba7353b883610bbb738c30472af9d4254bd7064495a106f2e8086de3
 
 # PHP extensions DokuWiki relies on (gd for image resizing, intl for better
 # Unicode handling, zip for archive uploads, mbstring for multibyte strings).
