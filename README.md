@@ -142,6 +142,37 @@ seed files (`local.php`, `acl.auth.php`, `plugins.local.php`, `mime.local.conf`)
 are written once onto an empty volume and never clobbered — so edits via the web
 UI survive. See [Upgrading & re-seeding](#upgrading--re-seeding).
 
+## Configuring DokuWiki
+
+After install, you configure the wiki the normal DokuWiki way — **through the
+Admin UI, not by redeploying.** Changes are written to the user-managed files on
+the volume (`local.php`, `acl.auth.php`, `users.auth.php`, `plugins.local.php`,
+`mime.local.conf`), which are seeded once and never clobbered, so they survive
+every redeploy.
+
+| To change… | Do this (persists, no redeploy) |
+| --- | --- |
+| Title, language, and most settings | **Admin → Configuration Manager** |
+| Who can read / write / upload | **Admin → Access Control List Management** |
+| Users and groups (add accounts, reset passwords) | **Admin → User Manager** |
+| Plugins and templates (install / update / remove) | **Admin → Extension Manager** |
+| Allowed upload types | edit `conf/mime.local.conf` on the volume (over SSH) |
+
+**You only need to re-deploy when the image itself changes:**
+
+- a **DokuWiki upgrade** — bump `DOKUWIKI_VERSION` + `DOKUWIKI_SHA256` (see
+  [Upgrading & re-seeding](#upgrading--re-seeding)); or
+- edits to **image-baked files** — the `Dockerfile`, anything in `conf-seed/`,
+  `entrypoint.sh`, `bootstrap-user.php`, `dokuwiki-opcache.ini`, or the
+  `corkboard` skill.
+
+> **One exception — the lockdown.** `conf/local.protected.php` (the closed-ACL /
+> no-self-registration / JSON-RPC lockdown) is **re-synced from `conf-seed/` on
+> every boot**, so you can't change it from the web UI — your edit would be
+> overwritten. To change the lockdown itself, edit
+> `conf-seed/local.protected.php` and re-deploy. (Deliberate: it keeps the
+> security baseline image-managed.)
+
 ## The agent + the bundled skill
 
 The `agent` account (groups `user,api`) is the identity an agent uses to talk to
