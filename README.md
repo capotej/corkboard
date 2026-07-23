@@ -329,11 +329,13 @@ everything you created or configured is carried over.
 fly logs    # look for "[entrypoint] JSON-RPC self-test ..." + the OPcache guard
 ```
 
-Or, with the skill env vars exported (see
-[The agent + the bundled skill](#the-agent--the-bundled-skill)):
+Or query the running release over the API (with the skill env vars exported —
+see [The agent + the bundled skill](#the-agent--the-bundled-skill)):
 
 ```bash
-python3 skills/corkboard/script/corkboard.py version    # reports the running release
+curl -s -u "$CORKBOARD_USER:$CORKBOARD_PASS" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"core.getWikiVersion","id":1}' \
+  "$CORKBOARD_URL/lib/exe/jsonrpc.php"     # e.g. "2026-07-14a"
 ```
 
 ### Re-applying seed defaults to an existing volume
