@@ -223,8 +223,8 @@ experiment in `playground:` — see `skills/corkboard/SKILL.md`). So your
 and what goes on which page. For example, a research-notes wiki:
 
 ```markdown
-## Notes wiki (DokuWiki `ml:` namespace)
-Lab notes and run records live on the Corkboard wiki. Use the `corkboard` skill for all interaction (it already enforces the hygiene rules — no orphans, cite sources, etc.). Be proactive — add or update `ml:` pages when you learn something durable; don't gate on asking.
+## Notes wiki
+Lab notes and run records live on the Corkboard wiki. Use the `corkboard` skill for all interaction. Be proactive — add or update `ml:` pages when you learn something durable; don't gate on asking.
 
 - **Namespace:** `ml:` (index `ml:start`). Per-run pages under `ml:runs:<name>`; concepts under `ml:concepts:<name>`; link each from its index.
 - **Log gotchas/lessons** into `ml:lessons` (a running log), not just chat.
