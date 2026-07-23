@@ -31,7 +31,7 @@ directories onto that volume on every boot — see
 
 | File / dir                  | Purpose                                                                  |
 | --------------------------- | ----------------------------------------------------------------------- |
-| `Dockerfile`                | PHP 8.5.8 + Apache image; downloads DokuWiki "Mort" (2026-07-14), verified against a pinned SHA-256 |
+| `Dockerfile`                | PHP 8.5.8 + Apache image; downloads a pinned DokuWiki release, verified against a pinned SHA-256 |
 | `entrypoint.sh`             | Wires the volume, applies the lockdown by default, bootstraps `admin`/`agent` from secrets |
 | `fly.toml`                  | Fly app config (**template — rename `app`**), HTTP service, volume mount, VM sizing |
 | `conf-seed/`                | Locked-down config templates: closed ACL, `useacl`, JSON-RPC, disabled plugins, broad upload allowlist |
@@ -224,14 +224,14 @@ survive automatically — the entrypoint is built for this.
 ### Steps
 
 ```dockerfile
-ARG DOKUWIKI_VERSION=2026-07-14a          # bump this
+ARG DOKUWIKI_VERSION=<new-version>          # bump this
 ARG DOKUWIKI_SHA256=<recomputed sha256>    # AND this (the URL is derived from VERSION)
 ```
 
 Recompute the hash from the new tarball, then redeploy:
 
 ```bash
-curl -sL "https://download.dokuwiki.org/src/dokuwiki/dokuwiki-2026-07-14a.tgz" | sha256sum
+curl -sL "https://download.dokuwiki.org/src/dokuwiki/dokuwiki-<new-version>.tgz" | sha256sum
 fly deploy
 ```
 
