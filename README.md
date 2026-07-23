@@ -2,8 +2,7 @@
 
 **Corkboard** is an **agentic wiki**: a flat-file [DokuWiki](https://www.dokuwiki.org/)
 instance, tuned for [Fly.io](https://fly.io), that's meant to be **read and
-written by an AI agent** through its built-in JSON-RPC API. Clone it, deploy it,
-point an agent at it.
+written by an AI agent** through its API. Clone it, deploy it, point an agent at it.
 
 ## Features
 
@@ -184,11 +183,16 @@ the wiki over JSON-RPC. It's created from the required `CORKBOARD_AGENT_PASS`
 secret on first boot in `conf/users.auth.php`. It has **read + update** but
 **not delete** (details in `skills/corkboard/SKILL.md`).
 
-### `skills/corkboard/` — the agent transport
+### Install the skill
 
-A stdlib-only Python client (`script/corkboard.py`) plus `SKILL.md` (the full
-command reference an agent loads). It calls `core.*` methods over HTTP Basic
-auth — one transport for pages **and** media.
+The `corkboard` skill ships in this repo (`skills/corkboard/`): a stdlib Python
+skill (`script/corkboard.py` + `SKILL.md`) that calls the `core.*` JSON-RPC
+methods over HTTP Basic auth — one transport for pages **and** media. Add it to
+your agent with:
+
+```bash
+npx skills add capotej/corkboard --skill corkboard
+```
 
 ### Auth env vars the skill needs
 
@@ -201,20 +205,35 @@ to the secrets you set at install time:**
 | `CORKBOARD_USER` | the agent username                       | hardcoded `agent`                             |
 | `CORKBOARD_PASS` | the agent password                       | `CORKBOARD_AGENT_PASS`                        |
 
-So to let an agent use your wiki:
-
 ```bash
 export CORKBOARD_URL=https://my-corkboard.fly.dev
 export CORKBOARD_USER=agent
 export CORKBOARD_PASS='<the CORKBOARD_AGENT_PASS value>'
-
-python3 skills/corkboard/script/corkboard.py put notes:hello --text "Hello from the agent" --sum "first page"
-python3 skills/corkboard/script/corkboard.py get notes:hello
-python3 skills/corkboard/script/corkboard.py media-upload chart.png reports chart.png   # -> reports:chart.png
 ```
 
-See `skills/corkboard/SKILL.md` for every command (get/put/append/delete/list/
-search, media upload/get/list, and `wanted`/`orphans`/`media-orphans` gardening).
+The agent then uses the skill to read/write pages, upload media, search, and
+garden links — see `skills/corkboard/SKILL.md` for the full command reference.
+
+### Pointing your agent at the wiki (AGENTS.md)
+
+The skill is just the transport. To make your agent actually *use* the wiki,
+give it a convention in `AGENTS.md`: which namespace to use, what goes where,
+and the hygiene rules. For example, a research-notes wiki:
+
+```markdown
+## Notes wiki (DokuWiki `ml:` namespace)
+Lab notes and run records live on the Corkboard wiki. Use the `corkboard` skill for all interaction. Be proactive — add or update `ml:` pages when you learn something durable; don't gate on asking.
+
+- **Namespace:** `ml:` (index `ml:start`). Per-run pages under `ml:runs:<name>`; concepts under `ml:concepts:<name>`; link each from its index.
+- **Log gotchas/lessons** into `ml:lessons` (a running log), not just chat.
+- **Every training run** gets its own `ml:runs:<name>` page (config, results, curve, artifact paths); link from `ml:results`.
+- **Upload charts/transcripts as media** (skill `media-upload`) and embed them — don't paste huge blobs inline.
+- **Cite sources:** link papers/datasets/models inline at first mention (`[[https://arxiv.org/abs/...|Name (Author, year)]]`); add a `===== Sources =====` section.
+```
+
+Adapt the namespace and conventions to your own project — the point is to give
+the agent a clear home (`ml:`), a page-per-thing pattern, and the hygiene rules
+(proactive edits, upload-then-embed, cite sources).
 
 ### Confirm the API works
 
