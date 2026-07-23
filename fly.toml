@@ -1,9 +1,15 @@
-# fly.toml app configuration file generated for corkboard-example on 2026-07-20T15:17:51-04:00
+# fly.toml — DokuWiki-on-Fly.io app config (TEMPLATE).
 #
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+# This repo is meant to be cloned, renamed, and deployed:
+#   1. Clone it:   git clone <url> <your-app-name>
+#   2. Edit `app = "..."` below to a globally-unique name -> https://<app>.fly.dev
+#   3. Set the required admin secret:
+#        fly secrets set DOKU_ADMIN_PASSWORD='...' -a <app>
+#   4. fly deploy
 #
+# See https://fly.io/docs/reference/configuration/ for the full schema.
 
-app = 'corkboard-example'
+app = 'corkboard-example'   # RENAME: must be globally unique across Fly.io
 primary_region = 'iad'
 
 [build]
