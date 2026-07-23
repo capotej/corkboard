@@ -13,7 +13,7 @@ What Corkboard ships with out of the box:
 - **JSON-RPC API** — DokuWiki's Remote API is enabled and restricted to the `@api`/`@admin` groups, for programmatic read/write over HTTP Basic auth.
 - **All safe upload formats** — ~150 file types allowed (text, source code, data/config, archives, fonts, e-books, …); `html`/`htm` are blocked (XSS vector).
 - **Corkboard RPC plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that returns wanted/orphan pages and unreferenced media in a single call.
-- **Agent skill** — a stdlib-only Python client (`skills/corkboard/`) an agent uses to create and maintain content in the wiki: write and organize pages, upload media, search, and keep links healthy (wanted/orphans/media-orphans).
+- **Agent skill** — a stdlib-only Python client (`skills/corkboard/`) an agent uses to create and maintain content in the wiki: write and organize pages, upload media, search, and keep links healthy (fast wanted/orphans/media-orphans lookup via the Corkboard RPC plugin).
 - **No phone-home** — `updatecheck=0`; the `popularity` plugin is disabled.
 - **Flat-file on a Fly volume** — no database; survives restarts and redeploys; ~0.7 s warm resume, ~7 s cold start.
 
