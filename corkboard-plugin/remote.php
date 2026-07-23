@@ -44,7 +44,8 @@ class remote_plugin_corkboard extends RemotePlugin
         foreach ($pages as $src) {
             // Outgoing internal links from cached metadata (no re-parse); same
             // data the search index uses, so it matches core.getPageLinks output.
-            foreach ((p_get_metadata($src, 'relation references') ?: []) as $tgt) {
+            // relation.references is [target_id => exists] — iterate the KEYS.
+            foreach ((p_get_metadata($src, 'relation references') ?: []) as $tgt => $_) {
                 $tgt = cleanID($tgt);
                 if ($tgt === '' || isset($existing[$tgt])) {
                     continue;
