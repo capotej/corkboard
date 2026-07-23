@@ -216,24 +216,25 @@ garden links — see `skills/corkboard/SKILL.md` for the full command reference.
 
 ### Pointing your agent at the wiki (AGENTS.md)
 
-The skill is just the transport. To make your agent actually *use* the wiki,
-give it a convention in `AGENTS.md`: which namespace to use, what goes where,
-and the hygiene rules. For example, a research-notes wiki:
+The `corkboard` skill is the transport **and** carries the generic wiki hygiene
+(keep pages linked / no orphans, reference uploaded media, cite sources,
+experiment in `playground:` — see `skills/corkboard/SKILL.md`). So your
+`AGENTS.md` only needs to add what's project-specific: which namespace to use
+and what goes on which page. For example, a research-notes wiki:
 
 ```markdown
 ## Notes wiki (DokuWiki `ml:` namespace)
-Lab notes and run records live on the Corkboard wiki. Use the `corkboard` skill for all interaction. Be proactive — add or update `ml:` pages when you learn something durable; don't gate on asking.
+Lab notes and run records live on the Corkboard wiki. Use the `corkboard` skill for all interaction (it already enforces the hygiene rules — no orphans, cite sources, etc.). Be proactive — add or update `ml:` pages when you learn something durable; don't gate on asking.
 
 - **Namespace:** `ml:` (index `ml:start`). Per-run pages under `ml:runs:<name>`; concepts under `ml:concepts:<name>`; link each from its index.
 - **Log gotchas/lessons** into `ml:lessons` (a running log), not just chat.
 - **Every training run** gets its own `ml:runs:<name>` page (config, results, curve, artifact paths); link from `ml:results`.
 - **Upload charts/transcripts as media** (skill `media-upload`) and embed them — don't paste huge blobs inline.
-- **Cite sources:** link papers/datasets/models inline at first mention (`[[https://arxiv.org/abs/...|Name (Author, year)]]`); add a `===== Sources =====` section.
 ```
 
-Adapt the namespace and conventions to your own project — the point is to give
-the agent a clear home (`ml:`), a page-per-thing pattern, and the hygiene rules
-(proactive edits, upload-then-embed, cite sources).
+That's all `AGENTS.md` needs to add — a namespace and a page-per-thing pattern.
+The generic hygiene (no orphans, citing sources, playground for experiments)
+already lives in the skill; don't duplicate it here.
 
 ### Confirm the API works
 
