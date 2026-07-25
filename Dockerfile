@@ -21,14 +21,17 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
         libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
         libzip-dev libicu-dev \
+        libapache2-mod-xsendfile \
         curl wget ca-certificates; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
     docker-php-ext-install -j"$(nproc)" gd zip intl; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
 
 # Enable Apache modules. rewrite = nice URLs/.htaccess; headers/expires = cache
-# headers; filter+deflate = on-the-wire gzip (rfcs/2026-07-25_http-compression.md).
-RUN a2enmod rewrite headers expires filter deflate
+# headers; filter+deflate = on-the-wire gzip (rfcs/2026-07-25_http-compression.md);
+# xsendfile = offload media delivery from PHP to Apache
+# (rfcs/2026-07-25_x-sendfile-media-delivery.md).
+RUN a2enmod rewrite headers expires filter deflate xsendfile
 
 # Download and extract DokuWiki into the webroot.
 RUN set -eux; \
@@ -57,6 +60,9 @@ COPY apache-deny-sensitive.conf /etc/apache2/conf-enabled/dokuwiki-security.conf
 
 # On-the-wire gzip compression of text responses (mod_deflate).
 COPY compression.conf /etc/apache2/conf-enabled/compression.conf
+
+# Offload media delivery from PHP to Apache (mod_xsendfile).
+COPY xsendfile.conf /etc/apache2/conf-enabled/xsendfile.conf
 
 # OPcache tuning (build-time only, zero per-boot cost). Sizes opcache for fast
 # cold starts; preload is intentionally disabled in the ini (it broke runtime

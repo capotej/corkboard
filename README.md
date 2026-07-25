@@ -15,6 +15,7 @@ What Corkboard ships with out of the box:
 - **Agent skill** — a stdlib-only Python skill (`skills/corkboard/`) the agent uses to read, write, organize, and garden the wiki — including **surgical** in-place edits and anchor inserts, in-page search, and batch edits across pages. See `skills/corkboard/SKILL.md`.
 - **No phone-home** — `updatecheck=0`; the `popularity` plugin is disabled.
 - **Gzip over the wire** — Apache (`mod_deflate`) compresses text responses for browsers and the agent; the skill sends `Accept-Encoding: gzip` and decodes it. DokuWiki does no encoding of its own (`gzip_output=0`).
+- **Efficient media delivery** — large attachments are streamed by Apache (`mod_xsendfile`), not buffered through a PHP worker; DokuWiki's `xsendfile=2` hands the file off after its ACL check.
 - **Flat-file on a Fly volume** — no database; survives restarts and redeploys; ~0.7 s warm resume, ~7 s cold start.
 
 ## What this is
@@ -44,6 +45,7 @@ directories onto that volume on every boot — see
 | `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): wanted/orphans/media-orphans, per-page link health, and compare-and-swap writes |
 | `apache-deny-sensitive.conf`| Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/`              |
 | `compression.conf`         | Gzip text responses over the wire (`mod_deflate`); DokuWiki stays uncompressed (`gzip_output=0`) |
+| `xsendfile.conf`           | Offload media delivery from PHP to Apache (`mod_xsendfile`); `XSendFilePath` scoped to `data/` |
 | `dokuwiki-opcache.ini`      | Sizes PHP OPcache (preload disabled — see cold-start notes)             |
 | `.dockerignore`             | Keeps build context lean                                                 |
 

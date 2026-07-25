@@ -1,7 +1,7 @@
 # X-Sendfile for media delivery (`mod_xsendfile` + DokuWiki `xsendfile`)
 
 **Date:** 2026-07-25
-**Status:** Accepted
+**Status:** Implemented
 
 ## Goal
 
@@ -229,17 +229,31 @@ $conf['xsendfile'] = 2;
   `fetch.php` for the auth and the `MEDIA_SENDFILE` event. X-Sendfile keeps that
   logic while moving only the *byte streaming* to Apache.
 
-## Implementation checklist
+## Implementation notes
 
-- [ ] Add `compression.conf`'s sibling: `xsendfile.conf` at repo root (above).
-- [ ] `Dockerfile`: add `libapache2-mod-xsendfile` to the apt install; add
-      `xsendfile` to `a2enmod`; add `COPY xsendfile.conf …/conf-enabled/`.
-- [ ] `conf-seed/local.protected.php`: add `$conf['xsendfile'] = 2;`.
-- [ ] Build locally, confirm `apache2ctl -M | grep xsendfile` shows the module.
-- [ ] Upload a large test media file; run the three verification steps above
-      (module loaded, no leaked header, correct body). Confirm the `XSendFilePath`
-      symlink/resolved-path assumption holds (if downloads come back empty, add
-      the missing path form).
-- [ ] Deploy and re-run the verification against the live instance.
-- [ ] Update `README.md` (the `xsendfile.conf` row in "What's here" and a brief
-      note), and move this checklist to implementation notes (per `AGENTS.md`).
+Implemented 2026-07-25. Build-time changes only; the gate is green locally
+(`ruff check`, `ruff format --check` over 10 files, `ty check`, 65/65 tests).
+Not yet built/deployed — the module-loaded / no-leaked-header / correct-body
+verifications require a running instance.
+
+- **`xsendfile.conf`** (new) — `XSendFile On` with `XSendFilePath` for both
+  `/var/www/html/data` and `/dokuwiki-persistent/data`, wrapped in
+  `<IfModule mod_xsendfile.c>`.
+- **`Dockerfile`** — added `libapache2-mod-xsendfile` to the apt install,
+  `xsendfile` to `a2enmod`, and `COPY xsendfile.conf …/conf-enabled/`.
+- **`conf-seed/local.protected.php`** — added `$conf['xsendfile'] = 2;`, locked
+  alongside the module so they can't drift.
+- **`README.md`** — added an `xsendfile.conf` row in "What's here" and an
+  "Efficient media delivery" Features bullet.
+
+### Notes / deviations
+
+- **Not done here (needs a live instance):** build the image, confirm
+  `apache2ctl -M | grep xsendfile`, upload a large media file, and run the three
+  verification steps (module loaded; no `X-Sendfile` header leaks to the client;
+  body size matches the source). The symlink/resolved-path whitelist assumption
+  (`/var/www/html/data` + `/dokuwiki-persistent/data`) is the thing to confirm
+  first — if downloads come back empty, a path form is missing and must be added.
+- **New runtime apt dep.** Unlike `mod_deflate`/`mod_filter`, `mod_xsendfile`
+  isn't in `apache2-bin`; `libapache2-mod-xsendfile` adds a small amount to the
+  image and one module loaded at Apache start.

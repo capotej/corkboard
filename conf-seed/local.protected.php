@@ -33,3 +33,10 @@ $conf['updatecheck'] = 0;
 // default is already 0; locked here so the web Configuration Manager can't flip
 // it on. See rfcs/2026-07-25_http-compression.md.
 $conf['gzip_output'] = 0;
+
+// Offload media delivery to Apache's mod_xsendfile. 2 = the X-Sendfile header
+// (Apache); the module (libapache2-mod-xsendfile) and xsendfile.conf must ship
+// with the image — if they don't, this leaks the internal path and breaks
+// downloads, so it's locked here alongside the module. See
+// rfcs/2026-07-25_x-sendfile-media-delivery.md.
+$conf['xsendfile'] = 2;
