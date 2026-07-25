@@ -23,6 +23,7 @@ RUN set -eux; \
         libzip-dev libicu-dev \
         libapache2-mod-xsendfile \
         libapache2-mod-evasive \
+        libapache2-mod-security2 \
         curl wget ca-certificates; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
     docker-php-ext-install -j"$(nproc)" gd zip intl; \
@@ -32,9 +33,10 @@ RUN set -eux; \
 # filter+deflate = on-the-wire gzip (rfcs/2026-07-25_http-compression.md);
 # xsendfile = offload media delivery (rfcs/2026-07-25_x-sendfile-media-delivery.md);
 # remoteip = recover real client IP from Fly's proxy (mod_evasive + logs need it);
-# reqtimeout = Slowloris caps; evasive = rough DoS rate-limit.
-# (rfcs/2026-07-25_apache-hardening.md)
-RUN a2enmod rewrite headers expires filter deflate xsendfile remoteip reqtimeout evasive
+# reqtimeout = Slowloris caps; evasive = rough DoS rate-limit;
+# security2 = mod_security v2 WAF engine (loads /etc/modsecurity/*.conf).
+# (rfcs/2026-07-25_apache-hardening.md, rfcs/2026-07-25_owasp-crs-waf.md)
+RUN a2enmod rewrite headers expires filter deflate xsendfile remoteip reqtimeout evasive security2
 
 # Disable modules we don't use (shrink attack surface). a2dismod on an
 # already-disabled module is a harmless no-op (exit 0). cgi: PHP runs as a module,
@@ -53,6 +55,26 @@ RUN set -eux; \
     # The archive extracts to a single top-level dir (dokuwiki/); strip it.
     tar -xzf /tmp/dokuwiki.tgz -C /var/www/html --strip-components=1; \
     rm /tmp/dokuwiki.tgz
+
+# OWASP Core Rule Set (CRS) 4 -- the WAF ruleset for the mod_security engine
+# enabled above. The Debian `modsecurity-crs` apt package ships CRS 3.x (more
+# false positives, the worst property for an agent that writes arbitrary page
+# content), so we pin CRS 4 from upstream instead. Pinned + SHA-256-verified,
+# the same pattern as the DokuWiki tarball above. Extracts to a single
+# top-level `coreruleset-<ver>/` dir, hence --strip-components=1.
+# Phase 1 runs DetectionOnly; see rfcs/2026-07-25_owasp-crs-waf.md.
+ARG CRS_VERSION=v4.28.0
+# SHA-256 of the CRS .tar.gz, pinned to CRS_VERSION -- verified on every build.
+# When you bump CRS_VERSION, recompute this (`curl -sL <url> | sha256sum`) or
+# override at build time with --build-arg CRS_SHA256=<sha>.
+ARG CRS_SHA256=d8acc96f25ad07c8e3a595a23c797324f6d77e59ddf9e26e90dd95ebd2e676ce
+RUN set -eux; \
+    rm -rf /etc/modsecurity/crs; \
+    wget -qO /tmp/crs.tgz "https://github.com/coreruleset/coreruleset/archive/refs/tags/${CRS_VERSION}.tar.gz"; \
+    echo "${CRS_SHA256}  /tmp/crs.tgz" | sha256sum -c -; \
+    mkdir -p /etc/modsecurity/crs; \
+    tar -xzf /tmp/crs.tgz -C /etc/modsecurity/crs --strip-components=1; \
+    rm /tmp/crs.tgz
 
 # Corkboard RPC plugin: server-side RPC methods for the agent (today:
 # wanted/orphans/media-orphans in a single call). Ships as a bundled plugin in
@@ -89,6 +111,16 @@ COPY xsendfile.conf /etc/apache2/conf-enabled/xsendfile.conf
 # (not .htaccess). Pairs with userewrite=2 + useslash=1 in local.protected.php.
 # (rfcs/2026-07-25_clean-urls-mod-rewrite.md)
 COPY rewrite.conf /etc/apache2/conf-enabled/rewrite.conf
+
+# mod_security + OWASP CRS 4 WAF (rfcs/2026-07-25_owasp-crs-waf.md). The engine
+# conf (modsecurity.conf) is picked up by security2.conf's
+# `IncludeOptional /etc/modsecurity/*.conf`; crs-setup.conf + the rules are pulled
+# in by conf-enabled/modsecurity-crs.conf (mods-enabled/ loads before
+# conf-enabled/ in apache2.conf, so the engine config is in place first).
+COPY modsecurity.conf /etc/modsecurity/modsecurity.conf
+COPY crs-setup.conf /etc/modsecurity/crs/crs-setup.conf
+COPY crs-exclusions.conf /etc/modsecurity/crs/crs-exclusions.conf
+COPY modsecurity-crs.conf /etc/apache2/conf-enabled/modsecurity-crs.conf
 
 # OPcache tuning (build-time only, zero per-boot cost). Sizes opcache for fast
 # cold starts; preload is intentionally disabled in the ini (it broke runtime

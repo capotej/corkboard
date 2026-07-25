@@ -1,7 +1,8 @@
 # OWASP CRS WAF via mod_security (detect → enforce)
 
 **Date:** 2026-07-25
-**Status:** Proposed
+**Status:** Proposed — Phase 1 code-complete; pending deploy + soak (Phase 2
+gated on Phase-1 FP data)
 
 ## Goal
 
@@ -443,16 +444,36 @@ only on that list.
 
 ### Phase 1 — Detect
 
-- [ ] `Dockerfile`: add `libapache2-mod-security2` to apt; `ARG CRS_VERSION` +
+- [x] `Dockerfile`: add `libapache2-mod-security2` to apt; `ARG CRS_VERSION` +
       pinned `CRS_SHA256`; download+verify+extract CRS 4 to
-      `/etc/modsecurity/crs`; `a2enmod security2`; `COPY` the four confs.
-- [ ] `modsecurity.conf`: `SecRuleEngine DetectionOnly`, `SecRequestBodyAccess On`,
+      `/etc/modsecurity/crs`; `a2enmod security2`; `COPY` the three confs.
+- [x] `modsecurity.conf`: `SecRuleEngine DetectionOnly`, `SecRequestBodyAccess On`,
       `SecResponseBodyAccess Off`, audit off, JSON body processor.
-- [ ] `crs-setup.conf`: default action `log,noauditlog`, PL1 (explicit).
-- [ ] `modsecurity-crs.conf`: the Include glue, `IfModule`-guarded.
+- [x] `crs-setup.conf`: default action `log,noauditlog`, PL1 (explicit).
+- [x] `modsecurity-crs.conf`: the Include glue, `IfModule`-guarded.
 - [ ] Deploy, run the Phase-1 verification curls; confirm detection entries land
       in Grafana and normal traffic is unaffected.
 - [ ] Soak ~1–2 weeks; build the rule-id × URI FP inventory in Grafana.
+
+**Phase 1 — implemented (code):** CRS pinned at **`v4.28.0`**
+(SHA-256 `d8acc96f25ad07c8e3a595a23c797324f6d77e59ddf9e26e90dd95ebd2e676ce`),
+verified the same way as the DokuWiki tarball. Four confs shipped:
+`modsecurity.conf`, `crs-setup.conf`, `modsecurity-crs.conf`, and
+`crs-exclusions.conf`. The exclusions file (RFC Decision #8) was created in
+Phase 1 (not deferred to Phase 2) to hold a favicon healthcheck exclusion:
+Fly's `fly.toml` healthcheck GETs the static `.ico` every 10s, which tripped
+minor PL1 protocol rules and -- with CRS's default `tx.reporting_level=4` --
+flooded the log with rule 980170 per-request summaries; a phase:1
+`ctl:ruleEngine=Off` for `/favicon.ico$` silences it. **Placement
+gotcha:** `crs-exclusions.conf` lives in `/etc/modsecurity/crs/` (alongside
+`crs-setup.conf`), NOT `/etc/modsecurity/` root — Debian `security2.conf`
+runs `IncludeOptional /etc/modsecurity/*.conf`, so a root-level file would be
+double-loaded (glob + our explicit include) → duplicate rule id → Apache
+fails to start. The `crs/` subdir is outside the non-recursive glob. Phase-2
+content-rule FP
+exclusions get added to the same file. (README 'Features' + 'What's here' rows
+and the checklist→notes conversion are the last Phase-2 item, per the
+convention in `AGENTS.md`.)
 
 ### Phase 2 — Enforce (gated on Phase-1 data)
 
