@@ -9,6 +9,8 @@ never-clobber contract and anchor placement are validated here; the RPC path
 
 Run:  python3 tests/test_corkboard_logic.py
 """
+import contextlib
+import io
 import json
 import os
 import sys
@@ -204,10 +206,108 @@ def test_load_edits():
     os.unlink(path_one)
 
 
+def test_page_rev_missing_page():
+    # Bug #2 guard: getPageInfo raises code 121 on a missing page, which used to
+    # crash _page_rev (and thus every CAS write on a new page through
+    # edit/insert/apply). code 121 must map to rev "0"; other errors must still
+    # surface so they are not silently swallowed.
+    orig = cb.rpc_call
+    try:
+        cb.rpc_call = lambda m, p: (None, {"code": 121, "message": "revision does not exist"})
+        check("missing page -> rev 0", cb._page_rev("ghost:page"), "0")
+
+        cb.rpc_call = lambda m, p: ({"revision": 1784986908}, None)
+        check("existing page -> its rev", cb._page_rev("real:page"), "1784986908")
+
+        cb.rpc_call = lambda m, p: (None, {"code": 500, "message": "boom"})
+        raised = False
+        try:
+            cb._page_rev("real:page")
+        except SystemExit:
+            raised = True
+        check("non-121 error still exits", raised, True)
+    finally:
+        cb.rpc_call = orig
+
+
+def _stub_apply(saved, fail_page):
+    """Wire no-op RPC stubs onto corkboard; _save appends to `saved` unless the
+    page is `fail_page`, in which case it sys.exits (simulating an RPC failure).
+    Returns the original values for restoration."""
+    orig = (cb.rpc, cb.rpc_call, cb._save, cb._linkhealth)
+    cb.rpc = lambda m, p: "A\nX\n"                         # getPage
+    cb.rpc_call = lambda m, p: ({"revision": 1}, None)      # getPageInfo (rev)
+    cb._linkhealth = lambda page: []
+
+    def fake_save(page, text, summary, base_rev=None):
+        if page == fail_page:
+            sys.exit("corkboard: simulated RPC failure")
+        saved.append(page)
+        return {"saved": True, "conflict": False, "current_rev": "2"}
+    cb._save = fake_save
+    return orig
+
+
+def _run_apply(plan, stop):
+    """Run cmd_apply on a temp plan with stubs; return (stdout, exit_code)."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tf:
+        json.dump(plan, tf)
+        path = tf.name
+    saved = []
+    orig = _stub_apply(saved, "bad:page")
+    buf = io.StringIO()
+    exit_code = None
+    try:
+        with contextlib.redirect_stdout(buf):
+            cb.cmd_apply(path, True, True, stop)
+    except SystemExit as e:
+        exit_code = e.code
+    finally:
+        cb.rpc, cb.rpc_call, cb._save, cb._linkhealth = orig
+        os.unlink(path)
+    return buf.getvalue(), exit_code, saved
+
+
+def test_apply_resilience():
+    # Observation guard: an entry whose RPC fails (sys.exit) must NOT abort the
+    # batch silently. Entry 1 commits; entry 2 fails; the per-page report still
+    # prints so partial progress is visible; exit is non-zero.
+    plan = [
+        {"page": "ok:page", "edits": [{"old": "A", "new": "B"}]},
+        {"page": "bad:page", "edits": [{"old": "X", "new": "Y"}]},
+    ]
+    out, exit_code, saved = _run_apply(plan, stop=False)
+    check("apply printed the report header", "=== apply summary ===" in out, True)
+    check("apply recorded the ok entry", "[      ok] ok:page" in out, True)
+    check("apply recorded the failed entry", "[  failed] bad:page" in out, True)
+    check("apply committed entry 1 before entry 2 failed", saved, ["ok:page"])
+    check("apply exited non-zero on partial failure", bool(exit_code), True)
+
+
+def test_apply_stop_on_first_error():
+    # With --stop-on-first-error, processing halts after the first failure and
+    # later entries are NOT attempted (but the report still prints). Default
+    # (continue) still tries every entry.
+    plan = [
+        {"page": "p1", "text": "AAA"},
+        {"page": "bad:page", "text": "BBB"},   # fails here
+        {"page": "p3", "text": "CCC"},
+    ]
+    out_stop, _, saved_stop = _run_apply(plan, stop=True)
+    check("stop-on-first-error: later entry not processed", "p3" not in saved_stop, True)
+    check("stop-on-first-error: report still printed",
+          "=== apply summary ===" in out_stop, True)
+
+    out_cont, _, saved_cont = _run_apply(plan, stop=False)
+    check("default continue: later entry IS processed", "p3" in saved_cont, True)
+    check("default continue: only the failing page unsaved", set(saved_cont), {"p1", "p3"})
+
+
 def main():
     for fn in (test_apply_edits, test_heading_text, test_locate_anchor,
                test_insert_block, test_find_matching_lines, test_extract_rev,
-               test_load_edits):
+               test_load_edits, test_page_rev_missing_page,
+               test_apply_resilience, test_apply_stop_on_first_error):
         fn()
     print(f"\n{_passed} passed, {_failed} failed")
     sys.exit(1 if _failed else 0)

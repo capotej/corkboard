@@ -53,9 +53,15 @@ def _b64auth():
     return "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
 
 
-def rpc(method, params=None):
-    """Call a core.* JSON-RPC method (positional params).
-    Returns the `result` field, or exits on error. Verified-working core.* set:
+def rpc_call(method, params=None):
+    """Call a JSON-RPC method (positional params). Returns (result, err), where
+    err is {code, message} on failure and None on success — JSON-RPC application
+    errors AND HTTP/network failures are normalized to the same shape. Does NOT exit — callers decide.
+    rpc() wraps this and exits on error; reach for rpc_call() directly when a
+    specific error is expected and recoverable (e.g. getPageInfo's code 121 on a
+    missing page).
+
+    Verified-working core.* set:
 
       core.getPage(page[,rev])                  -> str
       core.savePage(page, text, summary, minor) -> bool   (empty text clears page)
@@ -81,13 +87,22 @@ def rpc(method, params=None):
         with urllib.request.urlopen(req, timeout=120) as r:
             obj = json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
-        sys.exit(f"corkboard: HTTP {e.code} on {method}: {e.read().decode('utf-8','replace')[:300]}")
+        return None, {"code": e.code,
+                      "message": e.read().decode("utf-8", "replace")[:300]}
     except urllib.error.URLError as e:
-        sys.exit(f"corkboard: network error on {method}: {e}")
-    if obj.get("error"):
-        e = obj["error"]
-        sys.exit(f"corkboard: {method} failed: [{e.get('code')}] {e.get('message')}")
-    return obj.get("result")
+        return None, {"code": "network", "message": str(e)}
+    return obj.get("result"), obj.get("error")
+
+
+def rpc(method, params=None):
+    """Call a JSON-RPC method; exit with a clear message on ANY error (HTTP,
+    network, or JSON-RPC). Returns the `result` field. Use rpc_call() directly
+    when a specific error is expected and recoverable (e.g. getPageInfo's
+    code 121 on a missing page)."""
+    result, err = rpc_call(method, params)
+    if err:
+        sys.exit(f"corkboard: {method} failed: [{err.get('code')}] {err.get('message')}")
+    return result
 
 
 # ------------------------------------------------------------------- media ops
@@ -525,9 +540,17 @@ def _extract_rev(info):
 
 
 def _page_rev(page):
-    """Current revision of a page (core.getPageInfo), normalized to a string;
-    '0' for a page that doesn't exist yet. This is the CAS base value."""
-    return _extract_rev(rpc("core.getPageInfo", [page]) or {})
+    """Current revision of a page (core.getPageInfo), as a string; '0' for a
+    page that doesn't exist yet (so the first CAS save is allowed). getPageInfo
+    raises JSON-RPC code 121 ('revision does not exist') on a missing page
+    rather than returning a rev — treat that as '0', and let any other error
+    surface. This is the CAS base value."""
+    info, err = rpc_call("core.getPageInfo", [page])
+    if err:
+        if err.get("code") == 121:
+            return "0"
+        sys.exit(f"corkboard: core.getPageInfo failed: [{err.get('code')}] {err.get('message')}")
+    return _extract_rev(info)
 
 
 def _linkhealth(page):
@@ -620,14 +643,17 @@ def _entry_text(entry):
     return None
 
 
-def cmd_apply(path, check, use_cas):
+def cmd_apply(path, check, use_cas, stop_on_first_error=False):
     """Apply a JSON plan of edits/inserts/replaces across pages. Each entry:
       {"page":.., "sum":.., "edits":[{"old","new"}, ...]}          surgical edit
       {"page":.., "sum":.., "insert":{"under"|"after"|"before":.., "text":..}}
       {"page":.., "sum":.., "text":.. | "file":..}                    full replace
     Per-entry "check"/"cas" booleans override the apply-level defaults. A page
-    that errors is reported and skipped; the run continues, exiting non-zero if
-    any page did not apply (ok/noop are not failures)."""
+    that errors (incl. RPC failures) is recorded as `failed` and the run
+    CONTINUES by default — the per-page report always prints, so partial
+    progress is visible (DokuWiki has no transactions: committed entries stay).
+    Pass --stop-on-first-error to fail fast. Exits non-zero if any page did not
+    apply (ok/noop are not failures)."""
     with open(path, encoding="utf-8") as f:
         plan = json.load(f)
     if isinstance(plan, dict):
@@ -675,6 +701,15 @@ def cmd_apply(path, check, use_cas):
                 results.append((page, "failed", f"{op} — {res}"))
         except (ValueError, KeyError, FileNotFoundError, OSError, json.JSONDecodeError) as e:
             results.append((page or f"entry#{i}", "failed", f"{type(e).__name__}: {e}"))
+        except SystemExit as e:
+            # rpc()/sys.exit() failures (network, RPC errors) must not abort the
+            # whole batch — record this entry as failed and keep going, then
+            # print the full report so partial progress is visible (DokuWiki has
+            # no transactions: already-committed earlier entries stay).
+            results.append((page or f"entry#{i}", "failed",
+                            f"rpc: {str(e.code)[:160] if e.code else 'aborted'}"))
+        if stop_on_first_error and results and results[-1][1] not in ("ok", "noop"):
+            break
     print("=== apply summary ===")
     for pg, status, detail in results:
         print(f"  [{status:>8}] {pg} — {detail}")
@@ -778,6 +813,8 @@ def main():
     ap_apply.add_argument("file")
     ap_apply.add_argument("--no-check", dest="check", action="store_false", default=True)
     ap_apply.add_argument("--no-cas", dest="cas", action="store_false", default=True)
+    ap_apply.add_argument("--stop-on-first-error", dest="stop_on_first_error", action="store_true",
+                          help="abort after the first failed entry (default: continue and report all)")
 
     raw = sp.add_parser("raw", help="escape hatch: call any JSON-RPC method")
     raw.add_argument("method"); raw.add_argument("params", help="JSON array of params", nargs="?", default="[]")
@@ -864,7 +901,7 @@ def main():
             kind, val = "before", args.before
         cmd_insert(args.page, kind, val, _read_input(args), args.sum, args.check, args.cas)
     elif args.cmd == "apply":
-        cmd_apply(args.file, args.check, args.cas)
+        cmd_apply(args.file, args.check, args.cas, args.stop_on_first_error)
     elif args.cmd == "raw":
         try:
             params = json.loads(args.params)
