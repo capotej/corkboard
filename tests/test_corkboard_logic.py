@@ -9,6 +9,7 @@ never-clobber contract and anchor placement are validated here; the RPC path
 
 Run:  python3 tests/test_corkboard_logic.py
 """
+
 import contextlib
 import io
 import json
@@ -59,33 +60,39 @@ def check_raises(name, fn, *substrs):
 
 # ----------------------------------------------------------------- apply_edits
 def test_apply_edits():
-    check("single replace",
-          cb.apply_edits("hello world\nfoo bar", [("hello world", "hello earth")]),
-          "hello earth\nfoo bar")
+    check(
+        "single replace",
+        cb.apply_edits("hello world\nfoo bar", [("hello world", "hello earth")]),
+        "hello earth\nfoo bar",
+    )
 
-    check("multi sequential",
-          cb.apply_edits("a=1\nb=2", [("a=1", "a=2"), ("b=2", "b=3")]),
-          "a=2\nb=3")
+    check(
+        "multi sequential",
+        cb.apply_edits("a=1\nb=2", [("a=1", "a=2"), ("b=2", "b=3")]),
+        "a=2\nb=3",
+    )
 
     # edit 2 anchors text that edit 1 just produced -> sequential, not parallel
-    check("sequential dependency",
-          cb.apply_edits("x", [("x", "x=1"), ("x=1", "x=2")]),
-          "x=2")
+    check("sequential dependency", cb.apply_edits("x", [("x", "x=1"), ("x=1", "x=2")]), "x=2")
 
-    check("no-op (old==new) returns identical",
-          cb.apply_edits("abc", [("abc", "abc")]), "abc")
+    check("no-op (old==new) returns identical", cb.apply_edits("abc", [("abc", "abc")]), "abc")
 
-    check_raises("0 matches aborts",
-                 lambda: cb.apply_edits("abc", [("zzz", "q")]), "0 matches")
-    check_raises(">1 matches aborts",
-                 lambda: cb.apply_edits("dup dup", [("dup", "x")]), "2 times", "ambiguous")
-    check_raises("empty old aborts",
-                 lambda: cb.apply_edits("abc", [("", "x")]), "empty")
+    check_raises("0 matches aborts", lambda: cb.apply_edits("abc", [("zzz", "q")]), "0 matches")
+    check_raises(
+        ">1 matches aborts",
+        lambda: cb.apply_edits("dup dup", [("dup", "x")]),
+        "2 times",
+        "ambiguous",
+    )
+    check_raises("empty old aborts", lambda: cb.apply_edits("abc", [("", "x")]), "empty")
 
     # a later bad edit must not have mutated content from an earlier good one:
     # the whole call raises and the caller simply doesn't save.
-    check_raises("second edit bad -> whole call raises",
-                 lambda: cb.apply_edits("a\nb", [("a", "A"), ("nope", "X")]), "not found")
+    check_raises(
+        "second edit bad -> whole call raises",
+        lambda: cb.apply_edits("a\nb", [("a", "A"), ("nope", "X")]),
+        "not found",
+    )
 
 
 # --------------------------------------------------------------- _heading_text
@@ -105,74 +112,102 @@ def test_heading_text():
 def test_locate_anchor():
     lines = ["Intro", "===== Lessons =====", "- old lesson", "===== Notes =====", "- note"]
 
-    check("under exact heading -> heading line idx",
-          cb.locate_anchor(lines, "under", "Lessons"), 1)
-    check("after unique substring -> that line idx",
-          cb.locate_anchor(lines, "after", "old lesson"), 2)
-    check("before heading -> heading line idx",
-          cb.locate_anchor(lines, "before", "Notes"), 3)
+    check(
+        "under exact heading -> heading line idx", cb.locate_anchor(lines, "under", "Lessons"), 1
+    )
+    check(
+        "after unique substring -> that line idx",
+        cb.locate_anchor(lines, "after", "old lesson"),
+        2,
+    )
+    check("before heading -> heading line idx", cb.locate_anchor(lines, "before", "Notes"), 3)
 
-    check_raises("under missing lists candidates",
-                 lambda: cb.locate_anchor(lines, "under", "Nope"),
-                 "no heading", "Lessons", "Notes")
+    check_raises(
+        "under missing lists candidates",
+        lambda: cb.locate_anchor(lines, "under", "Nope"),
+        "no heading",
+        "Lessons",
+        "Notes",
+    )
 
     ambig = ["== A ==", "x", "== A =="]
-    check_raises("under ambiguous",
-                 lambda: cb.locate_anchor(ambig, "under", "A"), "appears 2 times")
+    check_raises(
+        "under ambiguous", lambda: cb.locate_anchor(ambig, "under", "A"), "appears 2 times"
+    )
 
-    check_raises("after missing",
-                 lambda: cb.locate_anchor(lines, "after", "zzz"), "not found")
+    check_raises("after missing", lambda: cb.locate_anchor(lines, "after", "zzz"), "not found")
 
     dups = ["dup here", "dup there"]
-    check_raises("after ambiguous",
-                 lambda: cb.locate_anchor(dups, "after", "dup"), "matched 2 lines")
+    check_raises(
+        "after ambiguous", lambda: cb.locate_anchor(dups, "after", "dup"), "matched 2 lines"
+    )
 
 
 # ----------------------------------------------------------------- insert_block
 def test_insert_block():
-    check("under inserts after heading as first section content",
-          cb.insert_block("===== Lessons =====\n- old\nmore", "under", "Lessons", "- new"),
-          "===== Lessons =====\n- new\n- old\nmore")
+    check(
+        "under inserts after heading as first section content",
+        cb.insert_block("===== Lessons =====\n- old\nmore", "under", "Lessons", "- new"),
+        "===== Lessons =====\n- new\n- old\nmore",
+    )
 
-    check("after inserts after matched line",
-          cb.insert_block("a\nb\nc", "after", "b", "B2"), "a\nb\nB2\nc")
+    check(
+        "after inserts after matched line",
+        cb.insert_block("a\nb\nc", "after", "b", "B2"),
+        "a\nb\nB2\nc",
+    )
 
-    check("before inserts before matched line",
-          cb.insert_block("a\nb\nc", "before", "b", "B0"), "a\nB0\nb\nc")
+    check(
+        "before inserts before matched line",
+        cb.insert_block("a\nb\nc", "before", "b", "B0"),
+        "a\nB0\nb\nc",
+    )
 
-    check("multiline text",
-          cb.insert_block("h\nx", "after", "h", "y\nz"), "h\ny\nz\nx")
+    check("multiline text", cb.insert_block("h\nx", "after", "h", "y\nz"), "h\ny\nz\nx")
 
-    check("trailing newline not doubled",
-          cb.insert_block("h\nx", "after", "h", "- a\n"), "h\n- a\nx")
+    check(
+        "trailing newline not doubled", cb.insert_block("h\nx", "after", "h", "- a\n"), "h\n- a\nx"
+    )
 
-    check("text with intentional blank line preserved",
-          cb.insert_block("h\nx", "after", "h", "- a\n\n"), "h\n- a\n\nx")
+    check(
+        "text with intentional blank line preserved",
+        cb.insert_block("h\nx", "after", "h", "- a\n\n"),
+        "h\n- a\n\nx",
+    )
 
-    check("insert preserves surrounding content far from anchor",
-          cb.insert_block("top\n===== H =====\nmiddle\nbottom", "under", "H", "INS"),
-          "top\n===== H =====\nINS\nmiddle\nbottom")
+    check(
+        "insert preserves surrounding content far from anchor",
+        cb.insert_block("top\n===== H =====\nmiddle\nbottom", "under", "H", "INS"),
+        "top\n===== H =====\nINS\nmiddle\nbottom",
+    )
 
 
 # ------------------------------------------------------------ find_matching_lines
 def test_find_matching_lines():
     content = "alpha\nbeta\ngamma\nalphabet"
-    check("single substring",
-          cb.find_matching_lines(content, "beta", False), [(2, "beta")])
-    check("multi substring",
-          cb.find_matching_lines(content, "alph", False), [(1, "alpha"), (4, "alphabet")])
-    check("regex anchored",
-          cb.find_matching_lines(content, "^b", True), [(2, "beta")])
-    check("no matches -> []",
-          cb.find_matching_lines(content, "zzz", False), [])
-    check("substring is case-sensitive by default",
-          cb.find_matching_lines(content, "ALPHA", False), [])
-    check("substring ignore-case matches",
-          cb.find_matching_lines(content, "ALPHA", False, ignore_case=True),
-          [(1, "alpha"), (4, "alphabet")])
-    check("regex ignore-case",
-          cb.find_matching_lines(content, "^A", True, ignore_case=True),
-          [(1, "alpha"), (4, "alphabet")])
+    check("single substring", cb.find_matching_lines(content, "beta", False), [(2, "beta")])
+    check(
+        "multi substring",
+        cb.find_matching_lines(content, "alph", False),
+        [(1, "alpha"), (4, "alphabet")],
+    )
+    check("regex anchored", cb.find_matching_lines(content, "^b", True), [(2, "beta")])
+    check("no matches -> []", cb.find_matching_lines(content, "zzz", False), [])
+    check(
+        "substring is case-sensitive by default",
+        cb.find_matching_lines(content, "ALPHA", False),
+        [],
+    )
+    check(
+        "substring ignore-case matches",
+        cb.find_matching_lines(content, "ALPHA", False, ignore_case=True),
+        [(1, "alpha"), (4, "alphabet")],
+    )
+    check(
+        "regex ignore-case",
+        cb.find_matching_lines(content, "^A", True, ignore_case=True),
+        [(1, "alpha"), (4, "alphabet")],
+    )
 
 
 # --------------------------------------------------------------- _extract_rev
@@ -181,10 +216,12 @@ def test_extract_rev():
     # 'revision', not 'version' — _page_rev returned 0 for every existing page
     # and every CAS write conflicted. This DokuWiki build uses 'revision' only.
     check("revision key", cb._extract_rev({"revision": 1784986908}), "1784986908")
-    check("version key is NOT read (this build uses 'revision')",
-          cb._extract_rev({"version": 123}), "0")
-    check("revision read; version ignored",
-          cb._extract_rev({"revision": 9, "version": 7}), "9")
+    check(
+        "version key is NOT read (this build uses 'revision')",
+        cb._extract_rev({"version": 123}),
+        "0",
+    )
+    check("revision read; version ignored", cb._extract_rev({"revision": 9, "version": 7}), "9")
     check("missing -> 0 (new page)", cb._extract_rev({}), "0")
     check("falsy revision -> 0", cb._extract_rev({"revision": 0}), "0")
     check("string revision coerced", cb._extract_rev({"revision": "1784986908"}), "1784986908")
@@ -236,8 +273,8 @@ def _stub_apply(saved, fail_page):
     page is `fail_page`, in which case it sys.exits (simulating an RPC failure).
     Returns the original values for restoration."""
     orig = (cb.rpc, cb.rpc_call, cb._save, cb._linkhealth)
-    cb.rpc = lambda m, p: "A\nX\n"                         # getPage
-    cb.rpc_call = lambda m, p: ({"revision": 1}, None)      # getPageInfo (rev)
+    cb.rpc = lambda m, p: "A\nX\n"  # getPage
+    cb.rpc_call = lambda m, p: ({"revision": 1}, None)  # getPageInfo (rev)
     cb._linkhealth = lambda page: []
 
     def fake_save(page, text, summary, base_rev=None):
@@ -245,6 +282,7 @@ def _stub_apply(saved, fail_page):
             sys.exit("corkboard: simulated RPC failure")
         saved.append(page)
         return {"saved": True, "conflict": False, "current_rev": "2"}
+
     cb._save = fake_save
     return orig
 
@@ -291,13 +329,12 @@ def test_apply_stop_on_first_error():
     # (continue) still tries every entry.
     plan = [
         {"page": "p1", "text": "AAA"},
-        {"page": "bad:page", "text": "BBB"},   # fails here
+        {"page": "bad:page", "text": "BBB"},  # fails here
         {"page": "p3", "text": "CCC"},
     ]
     out_stop, _, saved_stop = _run_apply(plan, stop=True)
     check("stop-on-first-error: later entry not processed", "p3" not in saved_stop, True)
-    check("stop-on-first-error: report still printed",
-          "=== apply summary ===" in out_stop, True)
+    check("stop-on-first-error: report still printed", "=== apply summary ===" in out_stop, True)
 
     out_cont, _, saved_cont = _run_apply(plan, stop=False)
     check("default continue: later entry IS processed", "p3" in saved_cont, True)
@@ -314,8 +351,8 @@ def test_rpc_call_unwraps_jsonrpc_error_in_http_body():
 
     def fake_urlopen(body):
         def _u(req, timeout=None):
-            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request",
-                                         {}, io.BytesIO(body))
+            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, io.BytesIO(body))
+
         return _u
 
     os.environ.setdefault("CORKBOARD_URL", "https://example.com")
@@ -324,35 +361,49 @@ def test_rpc_call_unwraps_jsonrpc_error_in_http_body():
     orig = urllib.request.urlopen
     try:
         # JSON-RPC error nested in an HTTP 400 body -> surface the RPC code/msg
-        body = json.dumps({
-            "error": {
-                "code": 121,
-                "message": "The requested page (revision) does not exist",
-            },
-        }).encode()
+        body = json.dumps(
+            {
+                "error": {
+                    "code": 121,
+                    "message": "The requested page (revision) does not exist",
+                },
+            }
+        ).encode()
         urllib.request.urlopen = fake_urlopen(body)
         res, err = cb.rpc_call("core.getPageInfo", ["ghost:page"])
         check("rpc_call surfaced nested RPC code (not HTTP 400)", err.get("code"), 121)
-        check("rpc_call surfaced nested RPC message",
-              err.get("message"), "The requested page (revision) does not exist")
+        check(
+            "rpc_call surfaced nested RPC message",
+            err.get("message"),
+            "The requested page (revision) does not exist",
+        )
         check("rpc_call returns no result on error", res, None)
 
         # non-JSON 400 body -> fall back to the HTTP code + raw body
         urllib.request.urlopen = fake_urlopen(b"<html>Bad Request</html>")
         res, err = cb.rpc_call("core.savePage", ["x"])
         check("non-JSON body -> HTTP code preserved", err.get("code"), 400)
-        check("non-JSON body -> raw body as message",
-              err.get("message"), "<html>Bad Request</html>")
+        check(
+            "non-JSON body -> raw body as message", err.get("message"), "<html>Bad Request</html>"
+        )
     finally:
         urllib.request.urlopen = orig
 
 
 def main():
-    for fn in (test_apply_edits, test_heading_text, test_locate_anchor,
-               test_insert_block, test_find_matching_lines, test_extract_rev,
-               test_load_edits, test_page_rev_missing_page,
-               test_rpc_call_unwraps_jsonrpc_error_in_http_body,
-               test_apply_resilience, test_apply_stop_on_first_error):
+    for fn in (
+        test_apply_edits,
+        test_heading_text,
+        test_locate_anchor,
+        test_insert_block,
+        test_find_matching_lines,
+        test_extract_rev,
+        test_load_edits,
+        test_page_rev_missing_page,
+        test_rpc_call_unwraps_jsonrpc_error_in_http_body,
+        test_apply_resilience,
+        test_apply_stop_on_first_error,
+    ):
         fn()
     print(f"\n{_passed} passed, {_failed} failed")
     sys.exit(1 if _failed else 0)

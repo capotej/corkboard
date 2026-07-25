@@ -35,6 +35,7 @@ Examples:
   corkboard.py media-get ns:diag.png -o diag.png        # download
   corkboard.py raw core.getMediaInfo '["ns:diag.png"]'  # escape hatch
 """
+
 import argparse
 import base64
 import json
@@ -155,13 +156,14 @@ def media_get(mediaid, out=None):
 
 # --------------------------------------------------------------- gardening ops
 def _all_page_ids():
-    return [p.get("id") if isinstance(p, dict) else p
-            for p in (rpc("core.listPages", ["", 0]) or [])]
+    return [
+        p.get("id") if isinstance(p, dict) else p for p in (rpc("core.listPages", ["", 0]) or [])
+    ]
 
 
 def _local_targets(page):
     out = []
-    for lk in (rpc("core.getPageLinks", [page]) or []):
+    for lk in rpc("core.getPageLinks", [page]) or []:
         if isinstance(lk, dict) and lk.get("type") == "local" and lk.get("page"):
             out.append(lk["page"])
     return out
@@ -169,9 +171,14 @@ def _local_targets(page):
 
 def _is_entrypoint(pid):
     # landing pages are legitimately un-linked from content; don't flag as orphans
-    return (pid.endswith(":start") or pid == "start"
-            or pid.endswith(":sidebar") or pid == "sidebar"
-            or pid.endswith(":playground") or pid == "playground")
+    return (
+        pid.endswith(":start")
+        or pid == "start"
+        or pid.endswith(":sidebar")
+        or pid == "sidebar"
+        or pid.endswith(":playground")
+        or pid == "playground"
+    )
 
 
 def cmd_links(page):
@@ -180,7 +187,7 @@ def cmd_links(page):
 
 
 def cmd_backlinks(page):
-    for src in (rpc("core.getPageBackLinks", [page]) or []):
+    for src in rpc("core.getPageBackLinks", [page]) or []:
         print(src)
 
 
@@ -246,8 +253,9 @@ def cmd_media_orphans(ns):
         found = None
     if found is None:
         # Fallback: client-side walk (N getMediaUsage calls) when the plugin is absent.
-        media = [m.get("id") if isinstance(m, dict) else m
-                 for m in (rpc("core.listMedia", [ns]) or [])]
+        media = [
+            m.get("id") if isinstance(m, dict) else m for m in (rpc("core.listMedia", [ns]) or [])
+        ]
         print(f"scanning {len(media)} media files for usage...", file=sys.stderr)
         found = []
         for mid in media:
@@ -320,8 +328,9 @@ def _emit_tree(node, lines, prefix, depth, level, system, scoped):
     depth None = full tree; depth N collapses anything deeper than N levels.
     The top-level `wiki:` namespace is always collapsed in the whole-wiki view
     (it's DokuWiki's built-in docs); scope in with --ns wiki to expand it."""
-    entries = ([("ns", n, c) for n, c in node["ns"].items()] +
-               [("page", n, info) for n, info in node["pages"].items()])
+    entries = [("ns", n, c) for n, c in node["ns"].items()] + [
+        ("page", n, info) for n, info in node["pages"].items()
+    ]
     entries.sort(key=_tree_sort_key)
     for idx, (kind, name, data) in enumerate(entries):
         last = idx == len(entries) - 1
@@ -352,8 +361,7 @@ def _to_json(node, system=False):
     return {
         "pages": node["count"],
         "namespace_pages": [
-            {"id": info["id"], "title": info["title"],
-             "is_index": _is_index_page(name, info)}
+            {"id": info["id"], "title": info["title"], "is_index": _is_index_page(name, info)}
             for name, info in sorted(node["pages"].items())
         ],
         "namespaces": [
@@ -387,11 +395,12 @@ def cmd_sitemap(ns, depth, as_json):
             pid = p.get("id", "")
             np = dict(p)
             np["full"] = pid
-            np["id"] = pid[len(pfx):] if (pfx and pid.startswith(pfx)) else pid
+            np["id"] = pid[len(pfx) :] if (pfx and pid.startswith(pfx)) else pid
             pages.append(np)
         else:
-            pages.append({"id": p[len(pfx):] if (pfx and p.startswith(pfx)) else p,
-                          "full": p, "title": ""})
+            pages.append(
+                {"id": p[len(pfx) :] if (pfx and p.startswith(pfx)) else p, "full": p, "title": ""}
+            )
     root = _build_tree(pages)
     _annotate(root)
     system = ns == "wiki" or ns.startswith("wiki:")
@@ -433,7 +442,8 @@ def apply_edits(content, edits):
         if n > 1:
             raise ValueError(
                 f"edit {i}: old text matches {n} times — anchor is ambiguous; "
-                f"include more surrounding text so it is unique. Refusing to save.")
+                f"include more surrounding text so it is unique. Refusing to save."
+            )
         cur = cur.replace(old, new, 1)
     return cur
 
@@ -444,7 +454,7 @@ def _heading_text(line):
     DokuWiki requires the leading and trailing '=' runs to be the SAME length,
     so we match them separately and compare — a naive backreference would
     backtracks the leading run and accept unbalanced ones like '==== T ==='."""
-    m = re.match(r'^(={2,6})\s*(.*?)\s*(=+)\s*$', line.strip())
+    m = re.match(r"^(={2,6})\s*(.*?)\s*(=+)\s*$", line.strip())
     if not m or len(m.group(1)) != len(m.group(3)):
         return None
     return m.group(2)
@@ -468,7 +478,7 @@ def locate_anchor(lines, kind, val):
             raise ValueError(f"heading {val!r} appears {len(hits)} times — ambiguous")
         return hits[0][0]
     hits = [i for i, ln in enumerate(lines) if val in ln]
-    what = "anchor" 
+    what = "anchor"
     if not hits:
         raise ValueError(f"{what} text {val!r} not found on any line")
     if len(hits) > 1:
@@ -485,11 +495,11 @@ def insert_block(content, kind, val, text):
     idx = locate_anchor(lines, kind, val)
     ins = text.split("\n")
     if ins and ins[-1] == "" and text.endswith("\n"):
-        ins = ins[:-1]   # 'a\n'.split -> ['a','']; drop the spurious trailing empty
+        ins = ins[:-1]  # 'a\n'.split -> ['a','']; drop the spurious trailing empty
     if kind == "before":
         new = lines[:idx] + ins + lines[idx:]
-    else:               # under / after both insert AFTER the anchor line
-        new = lines[:idx + 1] + ins + lines[idx + 1:]
+    else:  # under / after both insert AFTER the anchor line
+        new = lines[: idx + 1] + ins + lines[idx + 1 :]
     return "\n".join(new)
 
 
@@ -531,8 +541,10 @@ def _show_context(content, edits, ctx=2):
             mark = ">" if (n + 1) == lineno else " "
             print(f"{mark}{n + 1:>5}│{lines[n]}")
         if count > 1:
-            print(f"  ⚠ ambiguous ({count} matches) — add context to --old "
-                  "so it's unique before saving")
+            print(
+                f"  ⚠ ambiguous ({count} matches) — add context to --old "
+                "so it's unique before saving"
+            )
         print()
     print("(--show-context: nothing saved)")
 
@@ -608,9 +620,11 @@ def _commit(page, content, new_content, summary, check, use_cas):
     base_rev = _page_rev(page) if use_cas else None
     res = _save(page, new_content, summary, base_rev)
     if res.get("conflict"):
-        sys.exit(f"corkboard: CONFLICT — {page} was edited concurrently "
-                 f"(server rev {res.get('current_rev')}, expected {base_rev}). "
-                 f"NOT saved — re-run to re-fetch and retry.")
+        sys.exit(
+            f"corkboard: CONFLICT — {page} was edited concurrently "
+            f"(server rev {res.get('current_rev')}, expected {base_rev}). "
+            f"NOT saved — re-run to re-fetch and retry."
+        )
     if not res.get("saved"):
         sys.exit(f"corkboard: save failed for {page}: {res}")
     rev = res.get("current_rev")
@@ -729,8 +743,13 @@ def cmd_apply(path, check, use_cas, stop_on_first_error=False):
             # whole batch — record this entry as failed and keep going, then
             # print the full report so partial progress is visible (DokuWiki has
             # no transactions: already-committed earlier entries stay).
-            results.append((page or f"entry#{i}", "failed",
-                            f"rpc: {str(e.code)[:160] if e.code else 'aborted'}"))
+            results.append(
+                (
+                    page or f"entry#{i}",
+                    "failed",
+                    f"rpc: {str(e.code)[:160] if e.code else 'aborted'}",
+                )
+            )
         if stop_on_first_error and results and results[-1][1] not in ("ok", "noop"):
             break
     print("=== apply summary ===")
@@ -762,10 +781,14 @@ def main():
     p.add_argument("--text")
     p.add_argument("--sum", default="")
     p.add_argument(
-        "--rev", help="compare-and-swap: only save if current rev matches (from getPageInfo)",
+        "--rev",
+        help="compare-and-swap: only save if current rev matches (from getPageInfo)",
     )
     p.add_argument(
-        "--check", dest="check", action="store_true", default=False,
+        "--check",
+        dest="check",
+        action="store_true",
+        default=False,
         help="run a post-write link-health check",
     )
 
@@ -775,7 +798,10 @@ def main():
     a.add_argument("--text")
     a.add_argument("--sum", default="")
     a.add_argument(
-        "--check", dest="check", action="store_true", default=False,
+        "--check",
+        dest="check",
+        action="store_true",
+        default=False,
         help="run a post-write link-health check",
     )
 
@@ -789,7 +815,9 @@ def main():
     lst = sp.add_parser("list", help="list page ids in a namespace (recursive by default)")
     lst.add_argument("ns")
     lst.add_argument(
-        "--depth", type=int, default=0,
+        "--depth",
+        type=int,
+        default=0,
         help="0 = recursive (default); N = descend N levels",
     )
 
@@ -802,8 +830,13 @@ def main():
     mu.add_argument("file")
     mu.add_argument("ns")
     mu.add_argument("name")
-    mu.add_argument("--no-overwrite", dest="overwrite", action="store_false", default=True,
-                    help="fail instead of overwriting an existing media id")
+    mu.add_argument(
+        "--no-overwrite",
+        dest="overwrite",
+        action="store_false",
+        default=True,
+        help="fail instead of overwriting an existing media id",
+    )
 
     mg = sp.add_parser("media-get", help="download a media file via core.getMedia")
     mg.add_argument("mediaid")
@@ -833,11 +866,15 @@ def main():
     )
     sm.add_argument("--ns", default="", help="scope to a namespace")
     sm.add_argument(
-        "--depth", type=int, default=0,
+        "--depth",
+        type=int,
+        default=0,
         help="0 = full tree (default); N = collapse beyond N levels",
     )
     sm.add_argument(
-        "--json", dest="as_json", action="store_true",
+        "--json",
+        dest="as_json",
+        action="store_true",
         help="emit nested JSON instead of an ASCII tree",
     )
 
@@ -846,7 +883,10 @@ def main():
     f.add_argument("pattern")
     f.add_argument("-E", "--regex", action="store_true", help="treat pattern as a Python regex")
     f.add_argument(
-        "-i", "--ignore-case", dest="ignore_case", action="store_true",
+        "-i",
+        "--ignore-case",
+        dest="ignore_case",
+        action="store_true",
         help="case-insensitive match",
     )
 
@@ -856,28 +896,42 @@ def main():
     )
     e.add_argument("page")
     e.add_argument(
-        "--old", action="append", default=[], metavar="OLD",
+        "--old",
+        action="append",
+        default=[],
+        metavar="OLD",
         help="text to find (repeatable; pairs with the next --new)",
     )
     e.add_argument(
-        "--new", action="append", default=[], metavar="NEW",
+        "--new",
+        action="append",
+        default=[],
+        metavar="NEW",
         help="replacement (repeatable; pairs with the preceding --old)",
     )
     e.add_argument(
-        "--edits", metavar="FILE",
+        "--edits",
+        metavar="FILE",
         help="JSON file [{old,new},...] (alternative to --old/--new)",
     )
     e.add_argument("--sum", default="")
     e.add_argument(
-        "--show-context", action="store_true",
+        "--show-context",
+        action="store_true",
         help="preview each match + line numbers; save nothing",
     )
     e.add_argument(
-        "--no-check", dest="check", action="store_false", default=True,
+        "--no-check",
+        dest="check",
+        action="store_false",
+        default=True,
         help="skip the post-write link-health check",
     )
     e.add_argument(
-        "--no-cas", dest="cas", action="store_false", default=True,
+        "--no-cas",
+        dest="cas",
+        action="store_false",
+        default=True,
         help="skip concurrency-safe compare-and-swap (allow a blind overwrite)",
     )
 
@@ -888,12 +942,14 @@ def main():
     ins.add_argument("page")
     g = ins.add_mutually_exclusive_group(required=True)
     g.add_argument(
-        "--under", metavar="HEADING",
+        "--under",
+        metavar="HEADING",
         help="insert right after the heading named HEADING",
     )
     g.add_argument("--after", metavar="LINE", help="insert after the unique line containing LINE")
     g.add_argument(
-        "--before", metavar="LINE",
+        "--before",
+        metavar="LINE",
         help="insert before the unique line containing LINE",
     )
     ins.add_argument("--file")
@@ -910,7 +966,9 @@ def main():
     ap_apply.add_argument("--no-check", dest="check", action="store_false", default=True)
     ap_apply.add_argument("--no-cas", dest="cas", action="store_false", default=True)
     ap_apply.add_argument(
-        "--stop-on-first-error", dest="stop_on_first_error", action="store_true",
+        "--stop-on-first-error",
+        dest="stop_on_first_error",
+        action="store_true",
         help="abort after the first failed entry (default: continue and report all)",
     )
 
@@ -926,8 +984,10 @@ def main():
         if args.rev is not None:
             res = _save(args.page, text, args.sum, args.rev)
             if res.get("conflict"):
-                sys.exit(f"corkboard: CONFLICT — {args.page} edited concurrently "
-                         f"(server rev {res.get('current_rev')}, expected {args.rev}); NOT saved.")
+                sys.exit(
+                    f"corkboard: CONFLICT — {args.page} edited concurrently "
+                    f"(server rev {res.get('current_rev')}, expected {args.rev}); NOT saved."
+                )
             ok = res.get("saved")
         else:
             ok = rpc("core.savePage", [args.page, text, args.sum, False])
@@ -943,13 +1003,13 @@ def main():
         ok = rpc("core.savePage", [args.page, "", args.sum, False])
         print("cleared" if ok else "FAILED")
     elif args.cmd == "list":
-        for pg in (rpc("core.listPages", [args.ns, args.depth]) or []):
+        for pg in rpc("core.listPages", [args.ns, args.depth]) or []:
             print(pg.get("id") if isinstance(pg, dict) else pg)
     elif args.cmd == "all":
-        for pg in (rpc("core.listPages", ["", 0]) or []):
+        for pg in rpc("core.listPages", ["", 0]) or []:
             print(pg.get("id") if isinstance(pg, dict) else pg)
     elif args.cmd == "search":
-        for hit in (rpc("core.searchPages", [args.query]) or []):
+        for hit in rpc("core.searchPages", [args.query]) or []:
             print(f"{hit.get('id')}\t{hit.get('title', '')}")
     elif args.cmd == "version":
         print(rpc("core.getWikiVersion", []))
@@ -958,7 +1018,7 @@ def main():
     elif args.cmd == "media-get":
         media_get(args.mediaid, args.out)
     elif args.cmd == "media-list":
-        for m in (rpc("core.listMedia", [args.ns]) or []):
+        for m in rpc("core.listMedia", [args.ns]) or []:
             print(m.get("id") if isinstance(m, dict) else m)
     elif args.cmd == "media-info":
         print(json.dumps(rpc("core.getMediaInfo", [args.mediaid]), indent=2, default=str))
@@ -966,8 +1026,10 @@ def main():
         try:
             print(rpc("core.deleteMedia", [args.mediaid]))
         except SystemExit as e:
-            sys.exit(f"{e}\n(tip: the token has no delete permission (403); "
-                     "remove media via the web Media Manager.)")
+            sys.exit(
+                f"{e}\n(tip: the token has no delete permission (403); "
+                "remove media via the web Media Manager.)"
+            )
     elif args.cmd == "wanted":
         cmd_wanted()
     elif args.cmd == "orphans":
