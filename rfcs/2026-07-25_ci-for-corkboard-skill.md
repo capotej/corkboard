@@ -150,6 +150,8 @@ jobs:
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
       - name: Ruff check
         run: ruff check .
+      - name: Ruff format
+        run: ruff format --check .
       - name: ty check
         run: ty check skills/corkboard/script
       - name: Tests
@@ -166,6 +168,9 @@ What each piece does, per the patterns:
   install (P016).
 - **`ruff check .`** — lints every `.py` in the repo (the helper and the
   tests). Bare command, no `uv run` (P011, adapted).
+- **`ruff format --check .`** — the formatter, gated too. This is a deliberate
+  departure from P011's "formatter is optional, not part of the lint gate"
+  default (see Implementation notes): we gate it so the style stays enforced.
 - **`ty check skills/corkboard/script`** — type-checks the shipped source only,
   zero-config (P012).
 - **`python3 tests/test_corkboard_logic.py`** — the existing harness; exits
@@ -223,10 +228,14 @@ Resolved with **zero `ignore`/`noqa` additions** — the gate is genuinely clean
   lines (a docstring, an `avail = …` expression, a `print`) to ≤ 99 chars, plus two long
   lines in the test harness.
 
-`ruff format` was considered and **rejected**: it would churn ~235 lines of unrelated
-style changes (slicing spacing, `for x in (y or [])`, comment alignment, regex quotes)
-across the logic functions — an unfocused diff for a task whose scope is the CI gate.
-Surgical fixes keep the diff to actual violations only.
+`ruff format` was initially deferred to keep the lint-fix diff focused, then
+applied to both Python files and **added to the CI gate** as
+`ruff format --check .` — a deliberate departure from P011's "formatter is
+optional, not part of the lint gate" default, so the style stays enforced. The
+formatter does reflow logic functions (comprehension wrapping, boolean-expression
+line breaks, `for x in (y or [])`), so the format commit is a broad but purely
+mechanical normalization; behavior is unchanged (ruff check / ty / 65 tests /
+argparse `--help` all re-verified).
 
 ### ty
 

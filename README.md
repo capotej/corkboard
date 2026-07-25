@@ -142,14 +142,16 @@ placement, CAS revision handling. Run it locally:
 python3 tests/test_corkboard_logic.py
 ```
 
-CI (`.github/workflows/ci.yml`) runs that suite plus a lint pass (`ruff`) and a
-type-check pass (`ty`) on every push and pull request. The toolchain — `python`,
+CI (`.github/workflows/ci.yml`) runs that suite plus a lint pass (`ruff check`),
+a format pass (`ruff format --check`), and a type-check pass (`ty`) on every push
+and pull request. The toolchain — `python`,
 `ruff`, `ty` — is declared in `mise.toml` and installed in CI by `mise-action`,
 so local and CI run identical versions:
 
 ```bash
 mise install                          # python, ruff, ty (and php)
 ruff check .                          # lint
+ruff format --check .                 # format
 ty check skills/corkboard/script      # type-check the helper
 python3 tests/test_corkboard_logic.py # tests
 ```

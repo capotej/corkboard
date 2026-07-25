@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   skill:
-    name: Lint, type-check & test the corkboard skill
+    name: Lint, format, type-check & test the corkboard skill
     runs-on: ubuntu-latest
     steps:
       # P002: every third-party action is SHA-pinned with a version comment.
@@ -23,6 +23,8 @@ jobs:
       # step above — there are no setup-python / setup-uv / curl installs.
       - name: Ruff check
         run: ruff check .
+      - name: Ruff format
+        run: ruff format --check .
       - name: ty check
         run: ty check skills/corkboard/script
       - name: Tests
