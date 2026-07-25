@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Unit tests for the PURE string logic in corkboard.py.
+
+These deliberately exercise only the RPC-free helpers (apply_edits,
+locate_anchor, insert_block, find_matching_lines, _heading_text, _load_edits)
+so they run with NO live DokuWiki and NO credentials — the exact-match /
+never-clobber contract and anchor placement are validated here; the RPC path
+(save, cas, linkhealth) is validated against a real instance on deploy.
+
+Run:  python3 tests/test_corkboard_logic.py
+"""
+import json
+import os
+import sys
+import tempfile
+
+# Import the skill helper without running it (main() is __main__-guarded, and
+# _cfg()/rpc() are only called lazily, so importing touches no network).
+SCRIPT = os.path.join(os.path.dirname(__file__), "..", "skills", "corkboard", "script")
+sys.path.insert(0, os.path.abspath(SCRIPT))
+import corkboard as cb  # noqa: E402
+
+_passed = 0
+_failed = 0
+
+
+def check(name, got, want):
+    global _passed, _failed
+    if got == want:
+        _passed += 1
+    else:
+        _failed += 1
+        print(f"FAIL {name}\n  got:  {got!r}\n  want: {want!r}")
+
+
+def check_raises(name, fn, *substrs):
+    """Assert fn() raises ValueError whose message contains each `substrs`."""
+    global _passed, _failed
+    try:
+        fn()
+    except ValueError as e:
+        msg = str(e)
+        missing = [s for s in substrs if s not in msg]
+        if missing:
+            _failed += 1
+            print(f"FAIL {name}\n  raised but message missing {missing}\n  msg: {msg!r}")
+            return
+        _passed += 1
+        return
+    except Exception as e:  # wrong exception type
+        _failed += 1
+        print(f"FAIL {name}\n  raised {type(e).__name__}, expected ValueError")
+        return
+    _failed += 1
+    print(f"FAIL {name}\n  did not raise (expected ValueError)")
+
+
+# ----------------------------------------------------------------- apply_edits
+def test_apply_edits():
+    check("single replace",
+          cb.apply_edits("hello world\nfoo bar", [("hello world", "hello earth")]),
+          "hello earth\nfoo bar")
+
+    check("multi sequential",
+          cb.apply_edits("a=1\nb=2", [("a=1", "a=2"), ("b=2", "b=3")]),
+          "a=2\nb=3")
+
+    # edit 2 anchors text that edit 1 just produced -> sequential, not parallel
+    check("sequential dependency",
+          cb.apply_edits("x", [("x", "x=1"), ("x=1", "x=2")]),
+          "x=2")
+
+    check("no-op (old==new) returns identical",
+          cb.apply_edits("abc", [("abc", "abc")]), "abc")
+
+    check_raises("0 matches aborts",
+                 lambda: cb.apply_edits("abc", [("zzz", "q")]), "0 matches")
+    check_raises(">1 matches aborts",
+                 lambda: cb.apply_edits("dup dup", [("dup", "x")]), "2 times", "ambiguous")
+    check_raises("empty old aborts",
+                 lambda: cb.apply_edits("abc", [("", "x")]), "empty")
+
+    # a later bad edit must not have mutated content from an earlier good one:
+    # the whole call raises and the caller simply doesn't save.
+    check_raises("second edit bad -> whole call raises",
+                 lambda: cb.apply_edits("a\nb", [("a", "A"), ("nope", "X")]), "not found")
+
+
+# --------------------------------------------------------------- _heading_text
+def test_heading_text():
+    check("h2", cb._heading_text("== T =="), "T")
+    check("h3", cb._heading_text("=== T ==="), "T")
+    check("h5", cb._heading_text("===== T ====="), "T")
+    check("h6 balanced", cb._heading_text("====== T ======"), "T")
+    check("plain text is None", cb._heading_text("just text"), None)
+    check("mismatched levels is None", cb._heading_text("==== T ==="), None)
+    check("leading/trailing spaces stripped", cb._heading_text("  == Spaced ==  "), "Spaced")
+    check("multi-word title", cb._heading_text("===multi word heading==="), "multi word heading")
+    check("non-heading with equals is None", cb._heading_text("a = b = c"), None)
+
+
+# --------------------------------------------------------------- locate_anchor
+def test_locate_anchor():
+    lines = ["Intro", "===== Lessons =====", "- old lesson", "===== Notes =====", "- note"]
+
+    check("under exact heading -> heading line idx",
+          cb.locate_anchor(lines, "under", "Lessons"), 1)
+    check("after unique substring -> that line idx",
+          cb.locate_anchor(lines, "after", "old lesson"), 2)
+    check("before heading -> heading line idx",
+          cb.locate_anchor(lines, "before", "Notes"), 3)
+
+    check_raises("under missing lists candidates",
+                 lambda: cb.locate_anchor(lines, "under", "Nope"), "no heading", "Lessons", "Notes")
+
+    ambig = ["== A ==", "x", "== A =="]
+    check_raises("under ambiguous",
+                 lambda: cb.locate_anchor(ambig, "under", "A"), "appears 2 times")
+
+    check_raises("after missing",
+                 lambda: cb.locate_anchor(lines, "after", "zzz"), "not found")
+
+    dups = ["dup here", "dup there"]
+    check_raises("after ambiguous",
+                 lambda: cb.locate_anchor(dups, "after", "dup"), "matched 2 lines")
+
+
+# ----------------------------------------------------------------- insert_block
+def test_insert_block():
+    check("under inserts after heading as first section content",
+          cb.insert_block("===== Lessons =====\n- old\nmore", "under", "Lessons", "- new"),
+          "===== Lessons =====\n- new\n- old\nmore")
+
+    check("after inserts after matched line",
+          cb.insert_block("a\nb\nc", "after", "b", "B2"), "a\nb\nB2\nc")
+
+    check("before inserts before matched line",
+          cb.insert_block("a\nb\nc", "before", "b", "B0"), "a\nB0\nb\nc")
+
+    check("multiline text",
+          cb.insert_block("h\nx", "after", "h", "y\nz"), "h\ny\nz\nx")
+
+    check("trailing newline not doubled",
+          cb.insert_block("h\nx", "after", "h", "- a\n"), "h\n- a\nx")
+
+    check("text with intentional blank line preserved",
+          cb.insert_block("h\nx", "after", "h", "- a\n\n"), "h\n- a\n\nx")
+
+    check("insert preserves surrounding content far from anchor",
+          cb.insert_block("top\n===== H =====\nmiddle\nbottom", "under", "H", "INS"),
+          "top\n===== H =====\nINS\nmiddle\nbottom")
+
+
+# ------------------------------------------------------------ find_matching_lines
+def test_find_matching_lines():
+    content = "alpha\nbeta\ngamma\nalphabet"
+    check("single substring",
+          cb.find_matching_lines(content, "beta", False), [(2, "beta")])
+    check("multi substring",
+          cb.find_matching_lines(content, "alph", False), [(1, "alpha"), (4, "alphabet")])
+    check("regex anchored",
+          cb.find_matching_lines(content, "^b", True), [(2, "beta")])
+    check("no matches -> []",
+          cb.find_matching_lines(content, "zzz", False), [])
+
+
+# ------------------------------------------------------------------- _load_edits
+def test_load_edits():
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tf:
+        json.dump([{"old": "a", "new": "b"}, {"old": "c", "new": "d"}], tf)
+        path_list = tf.name
+    check("flat list", cb._load_edits(path_list), [("a", "b"), ("c", "d")])
+    os.unlink(path_list)
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tf:
+        json.dump({"old": "x", "new": "y"}, tf)
+        path_one = tf.name
+    check("single object -> one edit", cb._load_edits(path_one), [("x", "y")])
+    os.unlink(path_one)
+
+
+def main():
+    for fn in (test_apply_edits, test_heading_text, test_locate_anchor,
+               test_insert_block, test_find_matching_lines, test_load_edits):
+        fn()
+    print(f"\n{_passed} passed, {_failed} failed")
+    sys.exit(1 if _failed else 0)
+
+
+if __name__ == "__main__":
+    main()

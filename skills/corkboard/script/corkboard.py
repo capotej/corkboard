@@ -35,7 +35,7 @@ Examples:
   corkboard.py media-get ns:diag.png -o diag.png        # download
   corkboard.py raw core.getMediaInfo '["ns:diag.png"]'  # escape hatch
 """
-import argparse, base64, json, os, sys
+import argparse, base64, json, os, re, sys
 import urllib.error, urllib.request
 
 
@@ -374,6 +374,302 @@ def cmd_sitemap(ns, depth, as_json):
     print("\n".join(lines))
 
 
+# ------------------------------------------------------------------- editing ops
+# Surgical in-place editing: edit / find / insert / apply. The string logic
+# (apply_edits, locate_anchor, insert_block, find_matching_lines) is PURE — it
+# takes and returns text and touches no RPC — so it is unit-tested with no
+# server. The cmd_* wrappers do the getPage/commit; _commit centralizes save +
+# CAS + link-health so every writer behaves identically.
+
+
+def apply_edits(content, edits):
+    """Apply [(old, new), ...] SEQUENTIALLY (edit N sees edit N-1's result).
+    Each `old` MUST occur exactly once in the content as it stands when that
+    edit runs; a 0 or >1 match raises ValueError and changes nothing. This is
+    the exact-match contract of the local `edit` tool: never silently clobber.
+    Returns the new content (== content when every edit is a no-op)."""
+    cur = content
+    for i, (old, new) in enumerate(edits, 1):
+        if old == "":
+            raise ValueError(f"edit {i}: --old is empty")
+        n = cur.count(old)
+        if n == 0:
+            raise ValueError(f"edit {i}: old text not found (0 matches) — refusing to save")
+        if n > 1:
+            raise ValueError(
+                f"edit {i}: old text matches {n} times — anchor is ambiguous; "
+                f"include more surrounding text so it is unique. Refusing to save.")
+        cur = cur.replace(old, new, 1)
+    return cur
+
+
+def _heading_text(line):
+    """Strip DokuWiki heading decorators ('== T ==' .. '====== T ======').
+    Returns the bare heading title, or None if the line isn't a heading.
+    DokuWiki requires the leading and trailing '=' runs to be the SAME length,
+    so we match them separately and compare — a naive backreference would
+    backtracks the leading run and accept unbalanced ones like '==== T ==='."""
+    m = re.match(r'^(={2,6})\s*(.*?)\s*(=+)\s*$', line.strip())
+    if not m or len(m.group(1)) != len(m.group(3)):
+        return None
+    return m.group(2)
+
+
+def locate_anchor(lines, kind, val):
+    """Index (0-based) of the anchor line for an insert.
+      kind='under'  -> the heading whose title EQUALS val (insert after it)
+      kind='after'  -> the unique line containing val (insert after it)
+      kind='before' -> the unique line containing val (insert before it)
+    Raises ValueError on 0 or >1 matches so a bad anchor never silently lands."""
+    if kind == "under":
+        heads = [(i, _heading_text(ln)) for i, ln in enumerate(lines) if _heading_text(ln)]
+        hits = [(i, t) for i, t in heads if t == val]
+        if not hits:
+            avail = "\n".join(f"  L{i + 1}: {t}" for i, t in heads) or "  (no headings on this page)"
+            raise ValueError(f"no heading exactly named {val!r}. Headings:\n{avail}")
+        if len(hits) > 1:
+            raise ValueError(f"heading {val!r} appears {len(hits)} times — ambiguous")
+        return hits[0][0]
+    hits = [i for i, ln in enumerate(lines) if val in ln]
+    what = "anchor" 
+    if not hits:
+        raise ValueError(f"{what} text {val!r} not found on any line")
+    if len(hits) > 1:
+        raise ValueError(f"{what} text {val!r} matched {len(hits)} lines — need more context")
+    return hits[0]
+
+
+def insert_block(content, kind, val, text):
+    """Insert `text` (one or more lines) into content at the anchor.
+    kind in {under, after, before}; 'under' inserts right after the heading
+    (as the section's first content). A trailing newline in `text` is kept,
+    not doubled."""
+    lines = content.split("\n")
+    idx = locate_anchor(lines, kind, val)
+    ins = text.split("\n")
+    if ins and ins[-1] == "" and text.endswith("\n"):
+        ins = ins[:-1]   # 'a\n'.split -> ['a','']; drop the spurious trailing empty
+    if kind == "before":
+        new = lines[:idx] + ins + lines[idx:]
+    else:               # under / after both insert AFTER the anchor line
+        new = lines[:idx + 1] + ins + lines[idx + 1:]
+    return "\n".join(new)
+
+
+def find_matching_lines(content, pattern, regex):
+    """[(1-based lineno, line), ...] for lines matching `pattern` (substring,
+    or a Python regex when regex=True). Empty list = no matches."""
+    lines = content.split("\n")
+    if regex:
+        try:
+            rx = re.compile(pattern)
+        except re.error as e:
+            sys.exit(f"corkboard: invalid regex: {e}")
+        return [(i + 1, ln) for i, ln in enumerate(lines) if rx.search(ln)]
+    return [(i + 1, ln) for i, ln in enumerate(lines) if pattern in ln]
+
+
+def _show_context(content, edits, ctx=2):
+    """Preview where each edit's --old lands (first match + line numbers),
+    WITHOUT saving. Reports the match count so an ambiguous anchor is visible
+    before any write. Display only — does not validate uniqueness."""
+    lines = content.split("\n")
+    for i, (old, _new) in enumerate(edits, 1):
+        count = content.count(old)
+        print(f"=== edit {i}: {count} match(es) ===")
+        if count == 0:
+            print("  (old text not found anywhere on the page)")
+            print()
+            continue
+        pos = content.find(old)
+        lineno = content.count("\n", 0, pos) + 1
+        start = max(0, lineno - ctx)
+        end = min(len(lines), lineno + 1 + ctx)
+        for n in range(start, end):
+            mark = ">" if (n + 1) == lineno else " "
+            print(f"{mark}{n + 1:>5}│{lines[n]}")
+        if count > 1:
+            print(f"  ⚠ ambiguous ({count} matches) — add context to --old so it's unique before saving")
+        print()
+    print("(--show-context: nothing saved)")
+
+
+def _load_edits(path):
+    """Load a JSON edits file into [(old, new), ...]. Accepts either a flat list
+    of {"old","new"} objects or a single such object."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        data = [data]
+    out = []
+    for e in data:
+        if not isinstance(e, dict) or "old" not in e:
+            sys.exit(f"corkboard: edit entry missing 'old': {json.dumps(e)[:120]}")
+        out.append((e["old"], e.get("new", "")))
+    return out
+
+
+# ---- RPC wrappers shared by the writers (corkboard plugin assumed present) ---
+def _page_rev(page):
+    """Current revision of a page (core.getPageInfo 'version'), normalized to a
+    string; '0' for a page that doesn't exist yet. This is the CAS base value."""
+    info = rpc("core.getPageInfo", [page]) or {}
+    return str(info.get("version") or 0)
+
+
+def _linkhealth(page):
+    """Broken outgoing internal links from one page. plugin.corkboard.linkhealth
+    is the per-page analog of wanted() — index-backed, one call."""
+    return rpc("plugin.corkboard.linkhealth", [page]) or []
+
+
+def _print_linkhealth(page):
+    broken = _linkhealth(page)
+    if broken:
+        print(f"  ⚠ {len(broken)} broken outgoing link(s): {', '.join(broken)}")
+    else:
+        print("  ✓ no broken outgoing links")
+
+
+def _save(page, text, summary, base_rev=None):
+    """Save page text. With base_rev, use plugin.corkboard.cas (compare-and-swap):
+    writes only if the page's current rev == base_rev, else returns conflict and
+    writes nothing. Without base_rev, plain core.savePage (blind overwrite).
+    Returns {saved:bool, conflict:bool, current_rev:str|None}."""
+    if base_rev is not None:
+        return rpc("plugin.corkboard.cas", [page, str(base_rev), text, summary, False])
+    ok = rpc("core.savePage", [page, text, summary, False])
+    return {"saved": bool(ok), "conflict": False, "current_rev": None}
+
+
+def _commit(page, content, new_content, summary, check, use_cas):
+    """Save new_content (derived from `content`) for page. Handles CAS conflict,
+    prints outcome + link-health. Exits non-zero on conflict/failure; never
+    writes on conflict."""
+    base_rev = _page_rev(page) if use_cas else None
+    res = _save(page, new_content, summary, base_rev)
+    if res.get("conflict"):
+        sys.exit(f"corkboard: CONFLICT — {page} was edited concurrently "
+                 f"(server rev {res.get('current_rev')}, expected {base_rev}). "
+                 f"NOT saved — re-run to re-fetch and retry.")
+    if not res.get("saved"):
+        sys.exit(f"corkboard: save failed for {page}: {res}")
+    rev = res.get("current_rev")
+    print(f"saved {page}" + (f" (rev {rev})" if rev else ""))
+    if check:
+        _print_linkhealth(page)
+
+
+# ---- command handlers -------------------------------------------------------
+def cmd_find(page, pattern, regex):
+    content = rpc("core.getPage", [page]) or ""
+    matches = find_matching_lines(content, pattern, regex)
+    if not matches:
+        print(f"(no matches for {pattern!r} in {page})")
+        return
+    for n, ln in matches:
+        print(f"{n}:{ln}")
+
+
+def cmd_edit(page, edits, summary, show_context, check, use_cas):
+    content = rpc("core.getPage", [page]) or ""
+    if show_context:
+        _show_context(content, edits)
+        return
+    try:
+        new_content = apply_edits(content, edits)
+    except ValueError as e:
+        sys.exit(f"corkboard: edit aborted: {e}")
+    if new_content == content:
+        print("(no changes — edits are no-ops); not saving")
+        return
+    _commit(page, content, new_content, summary, check, use_cas)
+
+
+def cmd_insert(page, kind, val, text, summary, check, use_cas):
+    content = rpc("core.getPage", [page]) or ""
+    try:
+        new_content = insert_block(content, kind, val, text)
+    except ValueError as e:
+        sys.exit(f"corkboard: insert aborted: {e}")
+    if new_content == content:
+        print("(insert is a no-op); not saving")
+        return
+    _commit(page, content, new_content, summary, check, use_cas)
+
+
+def _entry_text(entry):
+    if "text" in entry:
+        return entry["text"]
+    if "file" in entry:
+        with open(entry["file"], encoding="utf-8") as f:
+            return f.read()
+    return None
+
+
+def cmd_apply(path, check, use_cas):
+    """Apply a JSON plan of edits/inserts/replaces across pages. Each entry:
+      {"page":.., "sum":.., "edits":[{"old","new"}, ...]}          surgical edit
+      {"page":.., "sum":.., "insert":{"under"|"after"|"before":.., "text":..}}
+      {"page":.., "sum":.., "text":.. | "file":..}                    full replace
+    Per-entry "check"/"cas" booleans override the apply-level defaults. A page
+    that errors is reported and skipped; the run continues, exiting non-zero if
+    any page did not apply (ok/noop are not failures)."""
+    with open(path, encoding="utf-8") as f:
+        plan = json.load(f)
+    if isinstance(plan, dict):
+        plan = [plan]
+    results = []
+    for i, entry in enumerate(plan, 1):
+        page = entry.get("page")
+        if not page:
+            results.append((f"entry#{i}", "skipped", "missing 'page'"))
+            continue
+        summary = entry.get("sum") or entry.get("summary") or ""
+        try:
+            content = rpc("core.getPage", [page]) or ""
+            if "edits" in entry:
+                edits = [(e["old"], e.get("new", "")) for e in entry["edits"]]
+                new_content = apply_edits(content, edits)
+                op = f"{len(edits)} edit(s)"
+            elif "insert" in entry:
+                ins = entry["insert"]
+                kind = next((k for k in ("under", "after", "before") if k in ins), None)
+                if kind is None:
+                    raise ValueError("insert needs one of under/after/before")
+                new_content = insert_block(content, kind, ins[kind], ins.get("text", ""))
+                op = f"insert {kind}"
+            else:
+                t = _entry_text(entry)
+                if t is None:
+                    raise ValueError("entry needs 'edits', 'insert', 'text', or 'file'")
+                new_content = t
+                op = "replace"
+            if new_content == content:
+                results.append((page, "noop", op + " — no changes"))
+                continue
+            base_rev = _page_rev(page) if (use_cas and entry.get("cas", True)) else None
+            res = _save(page, new_content, summary, base_rev)
+            if res.get("conflict"):
+                results.append((page, "conflict", f"{op} — server rev {res.get('current_rev')}"))
+            elif res.get("saved"):
+                msg = op
+                if check and entry.get("check", True):
+                    broken = _linkhealth(page)
+                    msg += f"; ⚠{len(broken)} broken" if broken else "; ✓ links ok"
+                results.append((page, "ok", msg))
+            else:
+                results.append((page, "failed", f"{op} — {res}"))
+        except (ValueError, KeyError, FileNotFoundError, OSError, json.JSONDecodeError) as e:
+            results.append((page or f"entry#{i}", "failed", f"{type(e).__name__}: {e}"))
+    print("=== apply summary ===")
+    for pg, status, detail in results:
+        print(f"  [{status:>8}] {pg} — {detail}")
+    bad = [r for r in results if r[1] not in ("ok", "noop")]
+    if bad:
+        sys.exit(f"\n{len(bad)} of {len(results)} page(s) not applied")
+
+
 # ------------------------------------------------------------------- subcommands
 def _read_input(args):
     if args.file:
@@ -391,9 +687,12 @@ def main():
 
     p = sp.add_parser("put", help="write a page (create/replace) via core.savePage")
     p.add_argument("page"); p.add_argument("--file"); p.add_argument("--text"); p.add_argument("--sum", default="")
+    p.add_argument("--rev", help="compare-and-swap: only save if current rev matches (from getPageInfo)")
+    p.add_argument("--check", dest="check", action="store_true", default=False, help="run a post-write link-health check")
 
     a = sp.add_parser("append", help="append text to a page via core.appendPage")
     a.add_argument("page"); a.add_argument("--file"); a.add_argument("--text"); a.add_argument("--sum", default="")
+    a.add_argument("--check", dest="check", action="store_true", default=False, help="run a post-write link-health check")
 
     d = sp.add_parser("delete", help="clear page content (empty savePage — an update; token has no delete perm)")
     d.add_argument("page"); d.add_argument("--sum", default="cleared")
@@ -437,6 +736,35 @@ def main():
     sm.add_argument("--depth", type=int, default=0, help="0 = full tree (default); N = collapse beyond N levels")
     sm.add_argument("--json", dest="as_json", action="store_true", help="emit nested JSON instead of an ASCII tree")
 
+    f = sp.add_parser("find", help="in-page search with line numbers (grep -n style)")
+    f.add_argument("page"); f.add_argument("pattern")
+    f.add_argument("-E", "--regex", action="store_true", help="treat pattern as a Python regex")
+
+    e = sp.add_parser("edit", help="surgical in-place edit: replace exact --old with --new (asserts a unique match)")
+    e.add_argument("page")
+    e.add_argument("--old", action="append", default=[], metavar="OLD", help="text to find (repeatable; pairs with the next --new)")
+    e.add_argument("--new", action="append", default=[], metavar="NEW", help="replacement (repeatable; pairs with the preceding --old)")
+    e.add_argument("--edits", metavar="FILE", help="JSON file [{old,new},...] (alternative to --old/--new)")
+    e.add_argument("--sum", default="")
+    e.add_argument("--show-context", action="store_true", help="preview each match + line numbers; save nothing")
+    e.add_argument("--no-check", dest="check", action="store_false", default=True, help="skip the post-write link-health check")
+    e.add_argument("--no-cas", dest="cas", action="store_false", default=True, help="skip concurrency-safe compare-and-swap (allow a blind overwrite)")
+
+    ins = sp.add_parser("insert", help="insert text at an anchor (--under HEADING | --after LINE | --before LINE)")
+    ins.add_argument("page")
+    g = ins.add_mutually_exclusive_group(required=True)
+    g.add_argument("--under", metavar="HEADING", help="insert right after the heading named HEADING")
+    g.add_argument("--after", metavar="LINE", help="insert after the unique line containing LINE")
+    g.add_argument("--before", metavar="LINE", help="insert before the unique line containing LINE")
+    ins.add_argument("--file"); ins.add_argument("--text"); ins.add_argument("--sum", default="")
+    ins.add_argument("--no-check", dest="check", action="store_false", default=True)
+    ins.add_argument("--no-cas", dest="cas", action="store_false", default=True)
+
+    ap_apply = sp.add_parser("apply", help="apply edits/inserts/replaces across pages from a JSON plan")
+    ap_apply.add_argument("file")
+    ap_apply.add_argument("--no-check", dest="check", action="store_false", default=True)
+    ap_apply.add_argument("--no-cas", dest="cas", action="store_false", default=True)
+
     raw = sp.add_parser("raw", help="escape hatch: call any JSON-RPC method")
     raw.add_argument("method"); raw.add_argument("params", help="JSON array of params", nargs="?", default="[]")
 
@@ -444,11 +772,23 @@ def main():
     if args.cmd == "get":
         sys.stdout.write(rpc("core.getPage", [args.page]) or "")
     elif args.cmd == "put":
-        ok = rpc("core.savePage", [args.page, _read_input(args), args.sum, False])
+        text = _read_input(args)
+        if args.rev is not None:
+            res = _save(args.page, text, args.sum, args.rev)
+            if res.get("conflict"):
+                sys.exit(f"corkboard: CONFLICT — {args.page} edited concurrently "
+                         f"(server rev {res.get('current_rev')}, expected {args.rev}); NOT saved.")
+            ok = res.get("saved")
+        else:
+            ok = rpc("core.savePage", [args.page, text, args.sum, False])
         print("ok" if ok else "FAILED")
+        if args.check:
+            _print_linkhealth(args.page)
     elif args.cmd == "append":
         ok = rpc("core.appendPage", [args.page, _read_input(args), args.sum, False])
         print("ok" if ok else "FAILED")
+        if args.check:
+            _print_linkhealth(args.page)
     elif args.cmd == "delete":
         ok = rpc("core.savePage", [args.page, "", args.sum, False])
         print("cleared" if ok else "FAILED")
@@ -490,6 +830,27 @@ def main():
         cmd_backlinks(args.page)
     elif args.cmd == "sitemap":
         cmd_sitemap(args.ns, args.depth, args.as_json)
+    elif args.cmd == "find":
+        cmd_find(args.page, args.pattern, args.regex)
+    elif args.cmd == "edit":
+        edits = list(_load_edits(args.edits)) if args.edits else []
+        if args.old:
+            if len(args.old) != len(args.new):
+                sys.exit("corkboard: --old and --new must appear the same number of times")
+            edits += list(zip(args.old, args.new))
+        if not edits:
+            sys.exit("corkboard: edit needs at least one --old/--new pair (or --edits FILE)")
+        cmd_edit(args.page, edits, args.sum, args.show_context, args.check, args.cas)
+    elif args.cmd == "insert":
+        if args.under is not None:
+            kind, val = "under", args.under
+        elif args.after is not None:
+            kind, val = "after", args.after
+        else:
+            kind, val = "before", args.before
+        cmd_insert(args.page, kind, val, _read_input(args), args.sum, args.check, args.cas)
+    elif args.cmd == "apply":
+        cmd_apply(args.file, args.check, args.cas)
     elif args.cmd == "raw":
         try:
             params = json.loads(args.params)

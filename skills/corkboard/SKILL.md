@@ -43,9 +43,11 @@ Conventions that keep an agent-driven wiki navigable, auditable, and clean.
 
 - **Set an edit summary every time** (`--sum`) — it populates page history / Recent
   Changes, so edits are auditable and reversible. Never leave it blank.
-- **Edit surgically** — `get` the page, make a targeted change, `put` it back
-  (read-modify-write), preserving the rest. Avoid full-page rewrites, which can
-  drop content or clobber concurrent edits.
+- **Edit surgically** — prefer `edit` (exact-match replace that asserts a unique
+  anchor) or `insert` (anchor-targeted) over full-page rewrites. Both fetch the
+  page, apply a targeted change, and save it back preserving the rest, and both
+  are concurrency-safe by default (compare-and-swap). See
+  [Surgical edits](#surgical-edits).
 - **Prefer idempotent writes** — `savePage`/`saveMedia` overwrite, so use a stable
   id and re-run safely. Failed retries are harmless, and you avoid inventing
   versioned throwaway names (`foo_v2`, `foo_final`).
@@ -91,8 +93,12 @@ skill dir: `<skill>/script/corkboard.py`.
 | command | what it does | API method |
 | --- | --- | --- |
 | `get <page>` | print raw wikitext | `core.getPage` |
+| `find <page> <pattern> [-E]` | **in-page search** w/ line numbers (`grep -n` style; `-E` = regex) | `core.getPage` |
 | `put <page> [--file F\|--text T] [--sum S]` | create/replace a page | `core.savePage` |
 | `append <page> [--file F\|--text T] [--sum S]` | append text (stdin ok) | `core.appendPage` |
+| `edit <page> (--old O --new N)+ [--edits F] [--sum S] [--show-context]` | **surgical replace** — asserts `--old` is unique; repeat pairs for multi-edit | `getPage`→`cas` |
+| `insert <page> (--under H\|--after L\|--before L) [--text T\|--file F] [--sum S]` | **insert at an anchor** (heading or line) | `getPage`→`cas` |
+| `apply <plan.json>` | **batch** edits/inserts/replaces across pages | `getPage`→`cas` |
 | `delete <page>` | **clear** page content (an update) | `core.savePage` w/ `""` |
 | `list <ns> [--depth N]` | page ids (recursive; `--depth N`) | `core.listPages` |
 | `all` | every page id | `core.listPages("", 0)` |
@@ -118,6 +124,92 @@ printf 'appended line\n' | python3 script/corkboard.py append some:page
 python3 script/corkboard.py media-upload chart.png reports chart.png   # -> reports:chart.png
 python3 script/corkboard.py media-get reports:chart.png -o chart.png
 ```
+
+## Surgical edits
+
+The most common wiki task is a small, targeted change — not a full-page
+rewrite. `get`/`put` force a read-modify-write you do by hand; `edit`, `insert`,
+`apply`, and `find` do it for you, surgically, with guards that **never silently
+clobber**.
+
+### `edit` — exact-match replace
+
+```bash
+python3 script/corkboard.py edit some:page --old "Status: pending" --new "Status: done" --sum "mark done"
+# multiple edits in one call (applied in order; each --old must be unique at its step):
+python3 script/corkboard.py edit some:page --old "a=1" --new "a=2" --old "b=1" --new "b=2"
+# big edit sets from a file: [{old,new}, ...]
+python3 script/corkboard.py edit some:page --edits edits.json --sum "batch fixes"
+# preview where each --old lands (with line numbers) without saving:
+python3 script/corkboard.py edit some:page --old "Status: pending" --show-context
+```
+
+- **Asserts a unique match.** If `--old` occurs **0** or **>1** times, the edit
+  **aborts and saves nothing** (never an ambiguous clobber). Use `--show-context`
+  to craft the shortest snippet that's still unique.
+- **Multi-edit applies sequentially** — edit N sees edit N-1's result, so a later
+  edit can anchor on text an earlier one produced.
+
+### `insert` — anchor-targeted
+
+```bash
+python3 script/corkboard.py insert some:page --under "Lessons" --text "- new lesson" --sum "add lesson"
+python3 script/corkboard.py insert some:page --after "===== Results =====" --text "| run | score |"
+python3 script/corkboard.py insert some:page --before "nav footer" --file note.txt
+```
+
+- `--under HEADING` inserts right after the heading (as the section's first
+  content). `--after`/`--before` insert relative to the unique line containing
+  the given text. Each anchor must match **exactly one** line, or it aborts.
+
+### `apply` — batch across pages
+
+One logical change often touches several pages. `apply` runs a JSON plan and
+reports per-page results (`ok`/`noop`/`conflict`/`failed`):
+
+```json
+[
+  {"page": "run:2024q1", "sum": "record result", "edits": [{"old": "status: tbd", "new": "status: pass"}]},
+  {"page": "results:index", "sum": "link run", "insert": {"after": "===== Q1 =====", "text": "  - [[run:2024q1]]"}},
+  {"page": "lessons", "sum": "lesson", "insert": {"under": "Lessons", "text": "- retry on 5xx"}}
+]
+```
+
+```bash
+python3 script/corkboard.py apply plan.json
+```
+
+Each entry is `edits` (a list of `{old,new}`), `insert` (`{under|after|before,
+text}`), or `text`/`file` (full replace). A page that errors is reported and
+skipped; the run continues and exits non-zero if any page didn't apply.
+
+### `find` — locate before you edit
+
+```bash
+python3 script/corkboard.py find some:page "Status:"        # substring; prints "N:line"
+python3 script/corkboard.py find some:page "^====" -E        # regex: every heading
+```
+
+Prints matching lines with 1-based numbers (`grep -n` style) — use it to pick a
+unique anchor for `edit`/`insert`.
+
+### Concurrency & link-health (on by default)
+
+`edit`, `insert`, and `apply` are **concurrency-safe by default** and report
+**link-health after writing**:
+
+- **Compare-and-swap.** They read the page's current revision, then save via
+  `plugin.corkboard.cas`, which writes **only if the revision is unchanged**. If
+  the page was edited concurrently you get a clear `CONFLICT … NOT saved` and a
+  non-zero exit — re-run to re-fetch and retry. `--no-cas` forces a blind
+  overwrite (rarely wanted). `put --rev <rev>` opts in for full-page writes.
+- **Link-health.** After saving they call `plugin.corkboard.linkhealth` and print
+  `✓ no broken outgoing links` or `⚠ N broken outgoing link(s): [...]` — so a
+  typo'd `[[link]]` is caught inline instead of surfacing in `wanted` later.
+  `--no-check` skips it; `put`/`append` opt in with `--check`.
+
+> Both use the bundled Corkboard RPC plugin (`plugin.corkboard.cas` /
+> `.linkhealth`), assumed present on every Corkboard wiki.
 
 `media-upload` reads bytes from `<file>`, base64-encodes, and calls
 `core.saveMedia`. It **overwrites by default** (`--no-overwrite` to require a
@@ -203,9 +295,10 @@ python3 script/corkboard.py backlinks <page>     # pages linking TO a page
 ```
 
 > **Fast path on Corkboard wikis.** When the bundled **Corkboard RPC** plugin
-> (`plugin.corkboard.*`) is present, `wanted` / `orphans` / `media-orphans` are
-> computed **server-side in a single call** (against the search index) instead
-> of walking every page from the client. The helper falls back to the per-page
+> (`plugin.corkboard.*`) is present, `wanted` / `orphans` / `media-orphans`, and
+> the per-page `linkhealth` used by `edit`/`insert`/`put --check`, are computed
+> **server-side in a single call** (against the search index) instead of
+> walking every page from the client. The helper falls back to the per-page
 > `core.*` walk automatically if the plugin isn't installed.
 
 `wanted` / `orphans` / `media-orphans` scan every page or media file (seconds to
