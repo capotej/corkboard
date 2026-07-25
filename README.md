@@ -16,6 +16,7 @@ What Corkboard ships with out of the box:
 - **No phone-home** — `updatecheck=0`; the `popularity` plugin is disabled.
 - **Gzip over the wire** — Apache (`mod_deflate`) compresses text responses for browsers and the agent; the skill sends `Accept-Encoding: gzip` and decodes it. DokuWiki does no encoding of its own (`gzip_output=0`).
 - **Efficient media delivery** — large attachments are streamed by Apache (`mod_xsendfile`), not buffered through a PHP worker; DokuWiki's `xsendfile=2` hands the file off after its ACL check.
+- **Hardened Apache layer** — no version banner / `TRACE`, security response headers (HSTS gated on Fly's `X-Forwarded-Proto` since Fly terminates TLS), directory listings off, `vendor/` added to the denied dirs, the real client IP recovered from Fly's proxy (`mod_remoteip`), Slowloris caps + a rough DoS heuristic (`mod_reqtimeout`/`mod_evasive`), and unused modules (`autoindex status info cgi userdir`) disabled.
 - **Flat-file on a Fly volume** — no database; survives restarts and redeploys; ~0.7 s warm resume, ~7 s cold start.
 
 ## What this is
@@ -43,7 +44,10 @@ directories onto that volume on every boot — see
 | `bootstrap-user.php`        | Creates the `admin` and `agent` accounts from Fly secrets (bcrypt, idempotent) |
 | `skills/corkboard/`         | The agent skill: a Python JSON-RPC client (`script/corkboard.py`) + `SKILL.md` |
 | `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): wanted/orphans/media-orphans, per-page link health, and compare-and-swap writes |
-| `apache-deny-sensitive.conf`| Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/`              |
+| `apache-deny-sensitive.conf`| Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/` `vendor/`, and sets `Options -Indexes -ExecCGI` |
+| `apache-hardening.conf`    | Server fingerprint/`TRACE` off, security response headers (HSTS gated on `X-Forwarded-Proto`), Slowloris caps |
+| `remoteip.conf`            | Recover the real client IP from Fly's proxy (`mod_remoteip` on `Fly-Client-IP`) |
+| `evasive.conf`             | Rough per-process DoS rate-limit (`mod_evasive`); loose thresholds + localhost whitelist |
 | `compression.conf`         | Gzip text responses over the wire (`mod_deflate`); DokuWiki stays uncompressed (`gzip_output=0`) |
 | `xsendfile.conf`           | Offload media delivery from PHP to Apache (`mod_xsendfile`); `XSendFilePath` scoped to `data/` |
 | `dokuwiki-opcache.ini`      | Sizes PHP OPcache (preload disabled — see cold-start notes)             |

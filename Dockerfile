@@ -22,16 +22,27 @@ RUN set -eux; \
         libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
         libzip-dev libicu-dev \
         libapache2-mod-xsendfile \
+        libapache2-mod-evasive \
         curl wget ca-certificates; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
     docker-php-ext-install -j"$(nproc)" gd zip intl; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
 
-# Enable Apache modules. rewrite = nice URLs/.htaccess; headers/expires = cache
-# headers; filter+deflate = on-the-wire gzip (rfcs/2026-07-25_http-compression.md);
-# xsendfile = offload media delivery from PHP to Apache
-# (rfcs/2026-07-25_x-sendfile-media-delivery.md).
-RUN a2enmod rewrite headers expires filter deflate xsendfile
+# Enable Apache modules. rewrite = nice URLs; headers/expires = cache headers;
+# filter+deflate = on-the-wire gzip (rfcs/2026-07-25_http-compression.md);
+# xsendfile = offload media delivery (rfcs/2026-07-25_x-sendfile-media-delivery.md);
+# remoteip = recover real client IP from Fly's proxy (mod_evasive + logs need it);
+# reqtimeout = Slowloris caps; evasive = rough DoS rate-limit.
+# (rfcs/2026-07-25_apache-hardening.md)
+RUN a2enmod rewrite headers expires filter deflate xsendfile remoteip reqtimeout evasive
+
+# Disable modules we don't use (shrink attack surface). a2dismod on an
+# already-disabled module is a harmless no-op (exit 0). cgi: PHP runs as a module,
+# never CGI; autoindex/status/info/userdir: not needed (disabling autoindex also
+# makes the Options -Indexes rule belt-and-suspenders). -f: Debian flags
+# autoindex as "essential", so a2dismod aborts it non-interactively without -f.
+# (rfcs/2026-07-25_apache-hardening.md)
+RUN a2dismod -f autoindex status info cgi userdir
 
 # Download and extract DokuWiki into the webroot.
 RUN set -eux; \
@@ -54,9 +65,19 @@ COPY corkboard-plugin/ /var/www/html/lib/plugins/corkboard/
 # secrets) are both required — the entrypoint fails fast if either is missing.
 COPY conf-seed/ /usr/local/share/dokuwiki-seed/
 
-# Defense-in-depth: block direct HTTP access to data/conf/bin/inc regardless
-# of .htaccess / AllowOverride behaviour (protects users.auth.php, etc.).
+# Defense-in-depth: block direct HTTP access to data/conf/bin/inc/vendor
+# regardless of .htaccess / AllowOverride behaviour (protects users.auth.php,
+# etc.), plus Options -Indexes -ExecCGI. (rfcs/2026-07-25_apache-hardening.md)
 COPY apache-deny-sensitive.conf /etc/apache2/conf-enabled/dokuwiki-security.conf
+
+# Apache server-level hardening: server fingerprint/TRACE, security headers,
+# Slowloris caps. (rfcs/2026-07-25_apache-hardening.md)
+COPY apache-hardening.conf /etc/apache2/conf-enabled/apache-hardening.conf
+
+# Recover the real client IP from Fly's proxy; rough DoS rate-limit.
+# (rfcs/2026-07-25_apache-hardening.md)
+COPY remoteip.conf /etc/apache2/conf-enabled/remoteip.conf
+COPY evasive.conf /etc/apache2/conf-enabled/evasive.conf
 
 # On-the-wire gzip compression of text responses (mod_deflate).
 COPY compression.conf /etc/apache2/conf-enabled/compression.conf

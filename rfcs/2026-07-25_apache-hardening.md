@@ -1,7 +1,7 @@
 # Apache hardening (fingerprint, headers, Slowloris, DoS heuristic, real client IP)
 
 **Date:** 2026-07-25
-**Status:** Accepted
+**Status:** Implemented
 
 ## Goal
 
@@ -102,7 +102,8 @@ preserves the inherited set and only toggles the two off.
    shouldn't exist on a production box. `a2dismod` on an already-disabled module
    is a harmless no-op that exits 0, so the line is idempotent across base
    images. (Disabling `autoindex` makes the `Options -Indexes` rule
-   belt-and-suspenders rather than the only line of defense.)
+   belt-and-suspenders rather than the only line of defense.) `-f` is required
+   because Debian flags `autoindex` "essential" and refuses it non-interactively.
 
 2. **`ServerTokens Prod`, `ServerSignature Off`, `TraceEnable Off`,
    `Options -Indexes -ExecCGI`.** Strip the version banner from headers and
@@ -183,8 +184,10 @@ RUN a2enmod rewrite headers expires filter deflate xsendfile remoteip reqtimeout
 # Disable unused modules (shrink attack surface). a2dismod on an already-disabled
 # module is a harmless no-op (exit 0). cgi: PHP runs as a module, never CGI;
 # autoindex/status/info/userdir: not needed (disabling autoindex also makes the
-# Options -Indexes rule belt-and-suspenders). (rfcs/2026-07-25_apache-hardening.md)
-RUN a2dismod autoindex status info cgi userdir
+# Options -Indexes rule belt-and-suspenders). -f: Debian flags autoindex
+# "essential", so a2dismod aborts it non-interactively without -f.
+# (rfcs/2026-07-25_apache-hardening.md)
+RUN a2dismod -f autoindex status info cgi userdir
 ```
 
 ```dockerfile
@@ -442,22 +445,48 @@ the response headers sit alongside whatever `mod_security` adds.
 - **Leave `vendor/` reachable.** Rejected: it's DokuWiki's Composer source on
   disk; no reason for it to be web-accessible. Same `Deny` class as `inc/`.
 
-## Implementation checklist
+## Implementation notes
 
-- [ ] `Dockerfile`: add `libapache2-mod-evasive` to apt; extend `a2enmod` with
-      `remoteip reqtimeout evasive`; add `a2dismod autoindex status info cgi
-      userdir`; `COPY` the three new confs.
-- [ ] `apache-deny-sensitive.conf`: add `vendor/`, switch to `<Directory>` grant
-      + `<DirectoryMatch>` deny, add `Options -Indexes -ExecCGI` (relative).
-- [ ] `apache-hardening.conf` (new): `ServerTokens`/`ServerSignature`/
-      `TraceEnable`, the three headers with HSTS gated on `X-Forwarded-Proto`,
-      `RequestReadTimeout`.
-- [ ] `remoteip.conf` (new): `Fly-Client-IP` + `RemoteIPInternalProxy fdaa::/48`
-      (+ loopback).
-- [ ] `evasive.conf` (new): loose thresholds + localhost whitelist.
-- [ ] Build, deploy, run the eight verification steps; confirm the access log
-      shows real client IPs (step 7 — the thing most likely to need a CIDR
-      tweak).
-- [ ] On moving to Implemented: update `README.md` (Features + "What's here" rows
-      for the four confs) and `AGENTS.md`, and replace this checklist with
-      implementation notes (per the RFC convention in `AGENTS.md`).
+Implemented 2026-07-25. Build-time only — one apt package, two module
+enable/disable lines, three new conf files and one edited conf; no DokuWiki or
+skill change. The gate is green locally (`ruff check`, `ruff format --check`
+over 11 files, `ty check`, 65/65 tests). Not yet built/deployed — the eight
+verification steps need a running instance.
+
+- **`Dockerfile`** — added `libapache2-mod-evasive` to apt; extended `a2enmod`
+  with `remoteip reqtimeout evasive`; added `a2dismod -f autoindex status info
+  cgi userdir` (`-f` because Debian flags `autoindex` essential); `COPY`s the
+  three new confs into `/etc/apache2/conf-enabled/`.
+- **`apache-deny-sensitive.conf`** (edited) — switched to a `<Directory>` grant
+  + `<DirectoryMatch>` deny, added `vendor/`, and added `Options -Indexes
+  -ExecCGI` (relative `+`/`-`, so `FollowSymLinks` is preserved).
+- **`apache-hardening.conf`** (new) — `ServerTokens Prod` / `ServerSignature Off`
+  / `TraceEnable Off`, the three security headers (HSTS gated via `SetEnvIf
+  X-Forwarded-Proto "^https$" HTTPS=on`), and `RequestReadTimeout`.
+- **`remoteip.conf`** (new) — `RemoteIPHeader Fly-Client-IP` with
+  `RemoteIPInternalProxy fdaa::/48` (+ loopback).
+- **`evasive.conf`** (new) — loose thresholds (`DOSPageCount 10`/`DOSPageInterval
+  2`, `DOSSiteCount 100`/`DOSSiteInterval 2`), `DOSBlockingPeriod 30`,
+  `DOSWhitelist 127.0.0.1`.
+- **`README.md`** — added a "Hardened Apache layer" Features bullet and four
+  "What's here" table rows (updated the `apache-deny-sensitive.conf` row, added
+  `apache-hardening.conf` / `remoteip.conf` / `evasive.conf`).
+- **`AGENTS.md`** — unchanged; it covers the corkboard skill / CI / RFC process,
+  none of which this RFC touches (no new commands or workflows).
+
+### Notes / deviations
+
+- **Not done here (needs a live instance):** build the image and run the eight
+  verification steps in *Migration / rollout*. The two highest-value checks are
+  (7) the access log shows **real client IPs**, not Fly's proxy — if it shows an
+  `fdaa::`/internal address, `RemoteIPInternalProxy`'s CIDR is wrong
+  (fail-closed → safe but ineffective; widen the range and redeploy); and (4)
+  HSTS is **absent on a direct HTTP hit** (no `X-Forwarded-Proto`) but **present
+  over HTTPS via Fly**, proving the gating works.
+- **`mod_evasive` is a per-process heuristic under prefork** (mod_php forces
+  prefork — see *Background*). It catches a naive single-IP flood, not a
+  distributed attack; a real DoS story would move to the edge (Fly) or `mod_qos`
+  if ever needed.
+- **`mod_security` + OWASP CRS remains deferred** to its own RFC (Decision #7);
+  the plan — Debian `modsecurity-crs` package, `DetectionOnly` first — is
+  recorded there.
