@@ -162,6 +162,31 @@ def test_find_matching_lines():
           cb.find_matching_lines(content, "^b", True), [(2, "beta")])
     check("no matches -> []",
           cb.find_matching_lines(content, "zzz", False), [])
+    check("substring is case-sensitive by default",
+          cb.find_matching_lines(content, "ALPHA", False), [])
+    check("substring ignore-case matches",
+          cb.find_matching_lines(content, "ALPHA", False, ignore_case=True),
+          [(1, "alpha"), (4, "alphabet")])
+    check("regex ignore-case",
+          cb.find_matching_lines(content, "^A", True, ignore_case=True),
+          [(1, "alpha"), (4, "alphabet")])
+
+
+# --------------------------------------------------------------- _extract_rev
+def test_extract_rev():
+    # Regression guard for the live bug where the server keyed the page rev as
+    # 'revision', not 'version' — _page_rev returned 0 for every existing page
+    # and every CAS write conflicted. This DokuWiki build uses 'revision' only.
+    check("revision key", cb._extract_rev({"revision": 1784986908}), "1784986908")
+    check("version key is NOT read (this build uses 'revision')",
+          cb._extract_rev({"version": 123}), "0")
+    check("revision read; version ignored",
+          cb._extract_rev({"revision": 9, "version": 7}), "9")
+    check("missing -> 0 (new page)", cb._extract_rev({}), "0")
+    check("falsy revision -> 0", cb._extract_rev({"revision": 0}), "0")
+    check("string revision coerced", cb._extract_rev({"revision": "1784986908"}), "1784986908")
+    check("non-dict (None) -> 0", cb._extract_rev(None), "0")
+    check("non-dict (list) -> 0", cb._extract_rev(["x"]), "0")
 
 
 # ------------------------------------------------------------------- _load_edits
@@ -181,7 +206,8 @@ def test_load_edits():
 
 def main():
     for fn in (test_apply_edits, test_heading_text, test_locate_anchor,
-               test_insert_block, test_find_matching_lines, test_load_edits):
+               test_insert_block, test_find_matching_lines, test_extract_rev,
+               test_load_edits):
         fn()
     print(f"\n{_passed} passed, {_failed} failed")
     sys.exit(1 if _failed else 0)

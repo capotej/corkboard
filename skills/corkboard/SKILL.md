@@ -93,7 +93,7 @@ skill dir: `<skill>/script/corkboard.py`.
 | command | what it does | API method |
 | --- | --- | --- |
 | `get <page>` | print raw wikitext | `core.getPage` |
-| `find <page> <pattern> [-E]` | **in-page search** w/ line numbers (`grep -n` style; `-E` = regex) | `core.getPage` |
+| `find <page> <pattern> [-E] [-i]` | **in-page search** w/ line numbers (`grep -n` style; `-E` regex, `-i` ignore-case) | `core.getPage` |
 | `put <page> [--file F\|--text T] [--sum S]` | create/replace a page | `core.savePage` |
 | `append <page> [--file F\|--text T] [--sum S]` | append text (stdin ok) | `core.appendPage` |
 | `edit <page> (--old O --new N)+ [--edits F] [--sum S] [--show-context]` | **surgical replace** — asserts `--old` is unique; repeat pairs for multi-edit | `getPage`→`cas` |
@@ -188,6 +188,7 @@ skipped; the run continues and exits non-zero if any page didn't apply.
 ```bash
 python3 script/corkboard.py find some:page "Status:"        # substring; prints "N:line"
 python3 script/corkboard.py find some:page "^====" -E        # regex: every heading
+python3 script/corkboard.py find some:page "status:" -i      # case-insensitive
 ```
 
 Prints matching lines with 1-based numbers (`grep -n` style) — use it to pick a
@@ -323,6 +324,11 @@ signal over the API.
   stray syntax char can quietly break a table or code block.
 - **Check pages exist before linking** — DokuWiki auto-creates a page on first
   save, so a typo'd link silently makes a stub.
+- **`raw` is display-only.** Its output is JSON (`json.dumps`), so text comes back
+  escaped — newlines as `\n`, quotes escaped. Never feed `raw core.getPage`
+  into a write (it collapses the page to one line). Use `get` to fetch page text
+  for writes; reserve `raw` for reading structured method results
+  (`core.getMediaInfo`, `plugin.corkboard.*`, …).
 
 ## DokuWiki syntax essentials
 

@@ -456,16 +456,21 @@ def insert_block(content, kind, val, text):
     return "\n".join(new)
 
 
-def find_matching_lines(content, pattern, regex):
+def find_matching_lines(content, pattern, regex, ignore_case=False):
     """[(1-based lineno, line), ...] for lines matching `pattern` (substring,
-    or a Python regex when regex=True). Empty list = no matches."""
+    or a Python regex when regex=True). ignore_case lowercases both sides for a
+    substring match and adds re.IGNORECASE for regex. Empty list = no matches."""
     lines = content.split("\n")
+    flags = re.IGNORECASE if ignore_case else 0
     if regex:
         try:
-            rx = re.compile(pattern)
+            rx = re.compile(pattern, flags)
         except re.error as e:
             sys.exit(f"corkboard: invalid regex: {e}")
         return [(i + 1, ln) for i, ln in enumerate(lines) if rx.search(ln)]
+    if ignore_case:
+        pat = pattern.lower()
+        return [(i + 1, ln) for i, ln in enumerate(lines) if pat in ln.lower()]
     return [(i + 1, ln) for i, ln in enumerate(lines) if pattern in ln]
 
 
@@ -510,11 +515,19 @@ def _load_edits(path):
 
 
 # ---- RPC wrappers shared by the writers (corkboard plugin assumed present) ---
+def _extract_rev(info):
+    """Pull the page revision out of a core.getPageInfo result, as a string.
+    This DokuWiki build serializes it as 'revision'. Returns '0' when missing /
+    falsy (a brand-new page compares as 0, so the first save is allowed)."""
+    if not isinstance(info, dict):
+        return "0"
+    return str(info.get("revision") or 0)
+
+
 def _page_rev(page):
-    """Current revision of a page (core.getPageInfo 'version'), normalized to a
-    string; '0' for a page that doesn't exist yet. This is the CAS base value."""
-    info = rpc("core.getPageInfo", [page]) or {}
-    return str(info.get("version") or 0)
+    """Current revision of a page (core.getPageInfo), normalized to a string;
+    '0' for a page that doesn't exist yet. This is the CAS base value."""
+    return _extract_rev(rpc("core.getPageInfo", [page]) or {})
 
 
 def _linkhealth(page):
@@ -561,9 +574,9 @@ def _commit(page, content, new_content, summary, check, use_cas):
 
 
 # ---- command handlers -------------------------------------------------------
-def cmd_find(page, pattern, regex):
+def cmd_find(page, pattern, regex, ignore_case=False):
     content = rpc("core.getPage", [page]) or ""
-    matches = find_matching_lines(content, pattern, regex)
+    matches = find_matching_lines(content, pattern, regex, ignore_case)
     if not matches:
         print(f"(no matches for {pattern!r} in {page})")
         return
@@ -739,6 +752,7 @@ def main():
     f = sp.add_parser("find", help="in-page search with line numbers (grep -n style)")
     f.add_argument("page"); f.add_argument("pattern")
     f.add_argument("-E", "--regex", action="store_true", help="treat pattern as a Python regex")
+    f.add_argument("-i", "--ignore-case", dest="ignore_case", action="store_true", help="case-insensitive match")
 
     e = sp.add_parser("edit", help="surgical in-place edit: replace exact --old with --new (asserts a unique match)")
     e.add_argument("page")
@@ -831,7 +845,7 @@ def main():
     elif args.cmd == "sitemap":
         cmd_sitemap(args.ns, args.depth, args.as_json)
     elif args.cmd == "find":
-        cmd_find(args.page, args.pattern, args.regex)
+        cmd_find(args.page, args.pattern, args.regex, args.ignore_case)
     elif args.cmd == "edit":
         edits = list(_load_edits(args.edits)) if args.edits else []
         if args.old:
