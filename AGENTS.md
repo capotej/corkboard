@@ -38,6 +38,7 @@ is no `pyproject.toml`, no `uv`, no `pip`. Tool versions come from `mise.toml`.
 - **Install the toolchain:** `mise install` (provides `python`, `ruff`, `ty`). PHP is **not** in mise (it never built there — see the note in `mise.toml`).
 - **Run tests:** `python3 tests/test_corkboard_logic.py` (a hand-rolled harness; no pytest).
 - **Lint & format:** `ruff check .` (lint) + `ruff format --check .` (format). Auto-fix: `ruff check --fix .` then `ruff format .`. Config lives in `ruff.toml` (the single config surface, since there's no `pyproject.toml`).
+- **`ruff format` reaches into Markdown:** ruff also formats Python inside fenced code blocks in `.md` files (e.g. `rfcs/*.md`, `README.md`), so illustrative Python there must be format-clean — `ruff format --check .` (and CI) fails otherwise. Run `ruff format .` to fix in place.
 - **Type-check:** `ty check skills/corkboard/script` (zero-config; point at the source, not `.`).
 
 CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`,

@@ -325,10 +325,9 @@ instance.
 
 ### Notes / deviations
 
-- **The RFC's own Python fences are `ruff format`-clean.** ruff 0.16 formats
-  Python inside ` ``` ` fences in `.md`, so the illustrative snippets here are
-  kept format-clean (the `rpc_call` snippet is shown as a function body for
-  natural indentation).
+- The `rpc_call` snippet is shown as a function body (not a dedented excerpt)
+  so its indentation is `ruff format`-clean — ruff formats Python in `.md`; see
+  the ruff/Markdown note in `AGENTS.md`.
 - **Not done here (needs a live instance):** build the image and run the four
   verification curls (Brotli clients fall back to `gzip`; CSS gzipped exactly
   once; JSON-RPC gzipped; pages gzipped), then deploy.
