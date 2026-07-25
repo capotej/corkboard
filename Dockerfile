@@ -28,7 +28,7 @@ RUN set -eux; \
     docker-php-ext-install -j"$(nproc)" gd zip intl; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
 
-# Enable Apache modules. rewrite = nice URLs; headers/expires = cache headers;
+# Enable Apache modules. rewrite = clean URLs (rfcs/2026-07-25_clean-urls-mod-rewrite.md); headers/expires = cache headers;
 # filter+deflate = on-the-wire gzip (rfcs/2026-07-25_http-compression.md);
 # xsendfile = offload media delivery (rfcs/2026-07-25_x-sendfile-media-delivery.md);
 # remoteip = recover real client IP from Fly's proxy (mod_evasive + logs need it);
@@ -84,6 +84,11 @@ COPY compression.conf /etc/apache2/conf-enabled/compression.conf
 
 # Offload media delivery from PHP to Apache (mod_xsendfile).
 COPY xsendfile.conf /etc/apache2/conf-enabled/xsendfile.conf
+
+# Clean URLs (mod_rewrite) — DokuWiki's canonical rewrite rules in server config
+# (not .htaccess). Pairs with userewrite=2 + useslash=1 in local.protected.php.
+# (rfcs/2026-07-25_clean-urls-mod-rewrite.md)
+COPY rewrite.conf /etc/apache2/conf-enabled/rewrite.conf
 
 # OPcache tuning (build-time only, zero per-boot cost). Sizes opcache for fast
 # cold starts; preload is intentionally disabled in the ini (it broke runtime

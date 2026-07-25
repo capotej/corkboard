@@ -50,3 +50,22 @@ $conf['gzip_output'] = 0;
 // downloads, so it's locked here alongside the module. See
 // rfcs/2026-07-25_x-sendfile-media-delivery.md.
 $conf['xsendfile'] = 2;
+
+// Clean URLs: DokuWiki emits path-style links (/wiki/syntax, not
+// /doku.php?id=wiki:syntax), and mod_rewrite (rewrite.conf) routes them back.
+// userewrite=1 = webserver rewrite (clean URLs via mod_rewrite); useslash=1 =
+// '/' between namespaces in URLs. Both REQUIRED together, and both must match
+// the rewrite rules — locked here so the web Configuration Manager can't flip
+// them off (which would 404 every clean link the wiki emits).
+// Old ugly URLs (/doku.php?id=…) still resolve (doku.php is a real file).
+// See rfcs/2026-07-25_clean-urls-mod-rewrite.md.
+$conf['userewrite'] = 1;
+$conf['useslash']   = 1;
+
+// Emit absolute (https://host/…) URLs + rel=canonical pointing at the clean
+// form, so the now-two URL shapes (clean + legacy ugly) don't read as duplicate
+// content to crawlers, and links in feeds/exports are stable. baseurl is
+// auto-detected from the request; no manual setting behind Fly. Separable from
+// the rewrite itself — can be dropped without affecting routing.
+// See rfcs/2026-07-25_clean-urls-mod-rewrite.md.
+$conf['canonical']  = 1;

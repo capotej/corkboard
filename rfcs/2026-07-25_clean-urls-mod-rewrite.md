@@ -1,7 +1,7 @@
 # Clean DokuWiki URLs via `mod_rewrite` (server config)
 
 **Date:** 2026-07-25
-**Status:** Proposed
+**Status:** Implemented
 
 ## Goal
 
@@ -14,7 +14,7 @@ Two changes do the whole job:
 
 1. **Add a `rewrite.conf`** in `/etc/apache2/conf-enabled/` holding DokuWiki's
    canonical rewrite rules inside a `<Directory /var/www/html>` block, and switch
-   DokuWiki's URL generator on with `$conf['userewrite'] = 2` + `$conf['useslash'] = 1`.
+   DokuWiki's URL generator on with `$conf['userewrite'] = 1` + `$conf['useslash'] = 1`.
 2. **Lock those two settings** in `conf-seed/local.protected.php` so the web
    Configuration Manager can't flip them off (which would instantly break every
    clean inbound link).
@@ -77,18 +77,21 @@ emits (page links, feeds, `rel=canonical`, edit/save actions):
 | `userewrite` | URL form                              | Notes                                   |
 | ------------ | ------------------------------------- | --------------------------------------- |
 | `0` (default)| `/doku.php?id=wiki:syntax`            | What we ship today (ugly).              |
-| `1`          | `/wiki:syntax`                        | Drops `doku.php`, **keeps colons**.     |
-| `2`          | `/wiki/syntax`                        | Fully clean — namespaces become path segments. Needs `useslash=1` + a rewrite that maps `/ns/page` back to `doku.php?id=ns:page`. |
+| `1`          | `/wiki:syntax` (or `/wiki/syntax` w/ `useslash=1`) | **Webserver rewrite** — the clean form; pairs with the `.htaccess`/`rewrite.conf` rules that map `/ns/page` → `doku.php?id=ns:page`. **This is what we want.** |
+| `2`          | `/doku.php/wiki:syntax` (or `…/wiki/syntax` w/ `useslash`) | **DokuWiki internal** (CGI `PATH_INFO`) — every URL still has `doku.php`; needs no webserver config. |
 
-We want `2`. Mode `1` still leaves colons in the URL (`/projects:foo:bar`), which
-is neither as readable nor as "clean" as the path-segment form, and is a strictly
-weaker stop. Mode `2` is the canonical "nice URL" mode and is exactly what
-DokuWiki's own `.htaccess.dist` template implements.
+We want `1`. Mode `2` is the trap: it is *not* clean — it relies on CGI
+`PATH_INFO`, so every emitted URL keeps `doku.php` (`/doku.php/wiki:syntax`).
+Mode `1` is the genuinely clean form and is exactly what DokuWiki's own
+`.htaccess.dist` template targets — per the [rewrite docs](https://www.dokuwiki.org/rewrite),
+option 1 is *"Rewriting is handled by the webserver"* and instructs copying
+`.htaccess.dist` to `.htaccess`. (The two modes were swapped in this RFC's first
+cut — see *Implementation notes*.)
 
 ### `useslash` — the other half of "clean"
 
 `$conf['useslash'] = 1` makes DokuWiki emit `/` instead of `:` between namespaces
-in URLs. It is **required** for `userewrite=2` to actually look clean — without
+in URLs. It is **required** for `userewrite=1` to actually look clean — without
 it you'd get `/projects:foo:bar` (path-less). The two settings are a pair; we set
 both.
 
@@ -142,9 +145,10 @@ pipeline, and X-Sendfile media delivery all keep working unmodified.
 
 ## Decisions
 
-1. **`userewrite=2` + `useslash=1`.** Fully clean URLs: `/wiki/syntax`,
-   `/projects/foo/bar`, `/start`. Mode `2` over mode `1` for the genuinely
-   path-segment form (see Background). Both locked in `local.protected.php`.
+1. **`userewrite=1` + `useslash=1`.** Fully clean URLs: `/wiki/syntax`,
+   `/projects/foo/bar`, `/start`. Mode `1` (webserver rewrite) is the clean one;
+   mode `2` is `PATH_INFO` and leaves `doku.php` in the URL (see Background).
+   Both locked in `local.protected.php`.
 
 2. **Rules in server config (`rewrite.conf`), not `.htaccess`.** Matches the repo's
    posture; avoids `AllowOverride All` and its per-request `stat()` cost; an
@@ -186,7 +190,7 @@ pipeline, and X-Sendfile media delivery all keep working unmodified.
 
 ```dockerfile
 # Clean URLs (mod_rewrite) — DokuWiki's canonical rewrite rules in server config
-# (not .htaccess). Pairs with userewrite=2 + useslash=1 in local.protected.php.
+# (not .htaccess). Pairs with userewrite=1 + useslash=1 in local.protected.php.
 # (rfcs/2026-07-25_clean-urls-mod-rewrite.md)
 COPY rewrite.conf /etc/apache2/conf-enabled/rewrite.conf
 ```
@@ -197,7 +201,7 @@ COPY rewrite.conf /etc/apache2/conf-enabled/rewrite.conf
 
 DokuWiki's shipped `.htaccess.dist`, ported to a `<Directory>` server-config block.
 Every rule is the canonical DokuWiki pattern — verified against the template
-DokuWiki ships for `userewrite=2`:
+DokuWiki ships for `userewrite=1` (webserver rewrite, option 1):
 
 ```apache
 # Clean URLs for DokuWiki via mod_rewrite, in SERVER config (not .htaccess).
@@ -209,7 +213,7 @@ DokuWiki ships for `userewrite=2`:
 # rfcs/2026-07-25_apache-hardening.md). Apache merges this <Directory> with the one
 # in apache-deny-sensitive.conf (Options -Indexes -ExecCGI); they compose.
 #
-# Pairs with $conf['userewrite']=2 + $conf['useslash']=1 in local.protected.php:
+# Pairs with $conf['userewrite']=1 + $conf['useslash']=1 in local.protected.php:
 # those make DokuWiki EMIT clean links; these rules ROUTE clean URLs back to PHP.
 # mod_rewrite is already a2enmod'd in the Dockerfile.
 #
@@ -260,13 +264,13 @@ make DokuWiki emit URLs the server can no longer route — every internal link w
 ```php
 // Clean URLs: DokuWiki emits path-style links (/wiki/syntax, not
 // /doku.php?id=wiki:syntax), and mod_rewrite (rewrite.conf) routes them back.
-// userewrite=2 = fully clean (namespaces become path segments); useslash=1 =
+// userewrite=1 = webserver rewrite (clean URLs via mod_rewrite); useslash=1 =
 // '/' between namespaces in URLs. Both REQUIRED together, and both must match
 // the rewrite rules — locked here so the web Configuration Manager can't flip
 // them off (which would 404 every clean link the wiki emits).
 // Old ugly URLs (/doku.php?id=…) still resolve (doku.php is a real file).
 // See rfcs/2026-07-25_clean-urls-mod-rewrite.md.
-$conf['userewrite'] = 2;
+$conf['userewrite'] = 1;
 $conf['useslash']   = 1;
 
 // Emit absolute (https://host/…) URLs + rel=canonical pointing at the clean
@@ -344,9 +348,10 @@ so this takes effect on the next deploy with no migration.)
 
 ## Alternatives considered
 
-- **`userewrite=1` (semi-clean, keeps colons).** Rejected: `/projects:foo:bar` is
-  neither as readable nor as genuinely "clean" as the path-segment form, and is a
-  strictly weaker stop. Mode `2` is what DokuWiki's own template targets.
+- **`userewrite=2` (DokuWiki internal / `PATH_INFO`).** Rejected: it is *not* the
+  clean form — every emitted URL keeps `doku.php` (`/doku.php/wiki:syntax`),
+  which was the exact symptom on the first (incorrect) deploy that used `2`. Mode
+  `1` is the webserver-rewrite form DokuWiki's `.htaccess.dist` template targets.
 - **`.htaccess` via `AllowOverride All`.** Rejected: diverges from this repo's
   explicit posture (server config for every Apache knob, independent of
   `AllowOverride`), adds a per-request `stat()` cost on every directory in the path,
@@ -366,18 +371,53 @@ so this takes effect on the next deploy with no migration.)
   through and doesn't rewrite. Doing it in Apache keeps it with the rest of the
   stack and self-contained in the image.
 
-## Implementation checklist
+## Implementation notes
 
-- [ ] Add `rewrite.conf` at repo root (DokuWiki's canonical rules in a
-      `<Directory /var/www/html>` block, with `AllowOverride None`).
-- [ ] `Dockerfile`: add `COPY rewrite.conf /etc/apache2/conf-enabled/rewrite.conf`
-      (module already enabled).
-- [ ] `conf-seed/local.protected.php`: add `$conf['userewrite'] = 2;`,
-      `$conf['useslash'] = 1;`, `$conf['canonical'] = 1;` with comments.
-- [ ] Run the gate: `ruff check`, `ruff format --check .` (note: ruff formats
-      Python in `.md`; the PHP/Apache snippets here are not Python, so unaffected —
-      but run it to be safe), `ty check`, and the test harness.
-- [ ] On moving to **Implemented**: build the image, run the 9 verification steps,
-      then update `README.md` with a "Clean URLs" Features bullet and a
-      `rewrite.conf` row in "What's here". Replace this checklist with
-      implementation notes (per the RFC process in `AGENTS.md`).
+Implemented 2026-07-25. Build-time only — one new conf, one `Dockerfile` `COPY`
+(and a comment touch-up), three settings in `local.protected.php`, plus README
+updates. No DokuWiki or skill change, and no `entrypoint.sh` change. The gate is
+green (`ruff check`, `ruff format --check` over 13 files, `ty check`, 65/65
+tests). Not yet built/deployed — the nine verification curls in *Migration /
+rollout* need a running instance.
+
+- **`rewrite.conf`** (new) — DokuWiki's canonical rewrite rules (`_media/`,
+  `_detail/`, `_export/`, the root, and the catch-all guarded by `!-f`/`!-d`) in
+  a `<Directory /var/www/html>` block with `AllowOverride None`, so it works
+  without `.htaccess`/`AllowOverride All`.
+- **`Dockerfile`** — added `COPY rewrite.conf /etc/apache2/conf-enabled/rewrite.conf`
+  alongside the other conf `COPY`s; also updated the `a2enmod` comment line from
+  "rewrite = nice URLs" to "rewrite = clean URLs (rfcs/…)" so the comment is
+  honest (the module was already enabled; only its comment changed).
+- **`conf-seed/local.protected.php`** — locked `$conf['userewrite'] = 1;`,
+  `$conf['useslash'] = 1;`, and `$conf['canonical'] = 1;` with explanatory
+  comments. The entrypoint re-syncs this file on every boot, so it takes effect
+  on the next deploy.
+- **`README.md`** — added a "Clean URLs" Features bullet and a `rewrite.conf` row
+  in the "What's here" table.
+- **`AGENTS.md`** — unchanged; it covers the corkboard skill / CI / RFC process,
+  none of which this RFC touches (no new commands or workflows).
+
+### Notes / deviations
+
+- **Corrected after live verification.** This RFC's first cut set `userewrite=2`,
+  swapping the two rewrite modes. `2` is DokuWiki's *internal* (`PATH_INFO`) mode
+  and emits `/doku.php/wiki:syntax` (still has `doku.php`), not the clean form;
+  `1` is the *webserver rewrite* mode that emits `/wiki/syntax` and pairs with
+  `rewrite.conf`. Live diagnosis confirmed it: with `2`, `wl()` returned
+  `/doku.php/projects/corkboard/testing`; flipping to `1` returned the clean path.
+  The Background table, Decisions, snippets, and this note were all corrected to
+  `1`. Source: the [DokuWiki rewrite docs](https://www.dokuwiki.org/rewrite).
+- **Not done here (needs a live instance):** build the image and run the nine
+  verification steps in *Migration / rollout*. The highest-value checks: (1) the
+  start page resolves at the clean root URL `/`; (2) a nested page resolves as
+  path segments (`/wiki/syntax`, no `doku.php`/colons); (3) legacy ugly URLs
+  (`/doku.php?id=…`) still return 200 (no breakage); and (8) the links DokuWiki
+  *emits* are now clean (`href="/…"`, not `href="/doku.php?id=…"`).
+- **`canonical=1` relies on DokuWiki's auto-detected `baseurl`.** It derives the
+  scheme/host from the incoming request; behind Fly this is usually correct, but
+  if absolute URLs ever emit as `http://` on an `https` site, set
+  `$conf['baseurl'] = 'https://<host>'` explicitly. Separable from the rewrite
+  itself — dropping `canonical` would not affect routing.
+- **`RewriteBase` left out on purpose** — correct for server-config context at the
+  webroot (no subdirectory). If the wiki were ever moved below the webroot,
+  `RewriteBase /<subdir>/` would need to be added.
