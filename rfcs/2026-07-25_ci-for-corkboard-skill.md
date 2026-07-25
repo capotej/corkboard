@@ -46,7 +46,7 @@ uv/pyproject machinery:
 | P012 (ty) | dev dep in pyproject, `uv run` | no pyproject | ty is a **mise tool** (P003), bare `ty check` |
 | P010 (uv) | Python project | n/a | **not adopted** — no uv, no lockfile |
 | P002 (SHA-pin) | any GH Actions | ✅ new workflow | applies directly |
-| P003 (mise) | single source of truth | ✅ already used | python/ruff/ty join `php` |
+| P003 (mise) | single source of truth | ✅ already used | python/ruff/ty (`php` later removed — never built under mise) |
 
 The key move: ruff and ty are **non-Python tools** (standalone Rust binaries).
 Per P003 they belong in `mise.toml`, not in a Python dependency manifest. mise
@@ -97,15 +97,21 @@ resolves both from its registry — `ruff` and `ty` (`aqua:astral-sh/ty`).
 
 ### `mise.toml` (additions)
 
-Add `python`, `ruff`, and `ty` alongside the existing `php`:
+Add `python`, `ruff`, and `ty`:
 
 ```toml
 [tools]
-php = "8.5.8"
 python = "3.13"
-ruff = "0.13"   # P011 reference lower bound; pin exact at implementation
-ty = "0.0.59"   # aqua:astral-sh/ty — latest in mise registry at time of writing
+ruff = "0.16.0"
+ty = "0.0.63"   # aqua:astral-sh/ty
 ```
+
+> **`php` was removed from `mise.toml` during implementation.** The original
+> `mise.toml` carried `php = "8.5.8"`, but the mise PHP (vfox) plugin compiles
+> from source (needs autoconf/libcurl) and never installed — and since
+> `mise-action` installs *every* tool in the file, that broken entry failed
+> the whole CI step. Production PHP comes from the Dockerfile's
+> `php:8.5.8-apache` base image, not mise, so removing it costs nothing.
 
 Exact versions are resolved and pinned at implementation time (mise resolves
 `ty` from `aqua:astral-sh/ty`). Bumping any of these is a one-line `mise.toml`
@@ -201,9 +207,11 @@ gh api repos/jdx/mise-action/commits/v4.2.0 --jq '.sha'
 
 Implemented 2026-07-25. The gate is live and green locally; CI runs on push/PR.
 
-- **`mise.toml`** — added `python = "3.13"`, `ruff = "0.16.0"`, `ty = "0.0.63"`
-  alongside `php`. `mise install` resolves all three (ty via `aqua:astral-sh/ty`).
-  Versions pinned to the exact resolutions at implementation time.
+- **`mise.toml`** — added `python = "3.13"`, `ruff = "0.16.0"`, `ty = "0.0.63"`.
+  `mise install` resolves all three (ty via `aqua:astral-sh/ty`). Versions pinned
+  to the exact resolutions at implementation time. The pre-existing
+  `php = "8.5.8"` entry was **removed** (see the note under `### mise.toml`
+  above): the vfox plugin can't build it, and it broke CI.
 - **`ruff.toml`** — added at repo root (`line-length = 99`, `target-version = "py313"`,
   `select = ["E","F","I","UP","B","SIM"]`).
 - **`.github/workflows/ci.yml`** — added. Action SHAs resolved live via `git ls-remote`

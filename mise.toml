@@ -1,8 +1,14 @@
-# Dev toolchain for this repo.
-# PHP mirrors the Dockerfile base image (php:8.5.8-apache) so local `php -l`
-# and runs match production. Install with:  mise install
+# Dev toolchain for this repo — currently just the Python toolchain for the
+# bundled `corkboard` skill (skills/corkboard/). Installed in CI by
+# jdx/mise-action. Install locally with:  mise install
+#
+# NOTE: PHP is deliberately NOT declared here. The mise PHP (vfox) plugin
+# builds from source and needs autoconf/libcurl/etc., which never succeeds —
+# not in CI, not locally — and since mise-action installs EVERY tool in this
+# file, a broken `php` entry fails the whole CI step. Production PHP comes from
+# the Dockerfile's `php:8.5.8-apache` base image; for local PHP, run the
+# container or install system php. (See rfcs/2026-07-25_ci-for-corkboard-skill.md)
 [tools]
-php = "8.5.8"
 # Python toolchain for the bundled `corkboard` skill: stdlib-only helper + a
 # dependency-free test harness. ruff (lint, P011) and ty (type-check, P012) are
 # non-Python tools -> declared here, not in any Python manifest (no pyproject).

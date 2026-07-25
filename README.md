@@ -149,7 +149,7 @@ and pull request. The toolchain — `python`,
 so local and CI run identical versions:
 
 ```bash
-mise install                          # python, ruff, ty (and php)
+mise install                          # python, ruff, ty
 ruff check .                          # lint
 ruff format --check .                 # format
 ty check skills/corkboard/script      # type-check the helper

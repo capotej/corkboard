@@ -35,7 +35,7 @@ The bundled `corkboard` skill is a **stdlib-only** Python helper
 (`tests/test_corkboard_logic.py`). This repo is **not** a Python project — there
 is no `pyproject.toml`, no `uv`, no `pip`. Tool versions come from `mise.toml`.
 
-- **Install the toolchain:** `mise install` (provides `python`, `ruff`, `ty`, `php`).
+- **Install the toolchain:** `mise install` (provides `python`, `ruff`, `ty`). PHP is **not** in mise (it never built there — see the note in `mise.toml`).
 - **Run tests:** `python3 tests/test_corkboard_logic.py` (a hand-rolled harness; no pytest).
 - **Lint & format:** `ruff check .` (lint) + `ruff format --check .` (format). Auto-fix: `ruff check --fix .` then `ruff format .`. Config lives in `ruff.toml` (the single config surface, since there's no `pyproject.toml`).
 - **Type-check:** `ty check skills/corkboard/script` (zero-config; point at the source, not `.`).
