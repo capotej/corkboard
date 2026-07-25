@@ -16,6 +16,16 @@ $conf['superuser']      = '@admin';
 // (Accounts are created by an admin via User Manager, or bootstrapped on first boot.)
 $conf['disableactions'] = 'register,resendpwd';
 
+// Sitemap (do=index) leak: DokuWiki builds the namespace tree from the on-disk
+// data/pages/ directories, so anonymous visitors — who have NO read permission
+// (@ALL 0) — still see every top-level namespace (ml, personal, projects, …)
+// as expandable folders, revealing the wiki's structure even though the pages
+// inside are ACL-blocked. sneaky_index makes the sitemap respect read ACL on
+// namespaces: with @ALL 0 anonymous users see an empty sitemap, while logged-in
+// users (@user 8) see the full tree. Locked here so it can't be relaxed from
+// the web Configuration Manager.
+$conf['sneaky_index'] = 1;
+
 // JSON-RPC API (lib/exe/jsonrpc.php). Enabled here so it can't be toggled off
 // from the web UI. Access is restricted to the @api group (the bootstrapped
 // 'agent' user) plus @admin. ACL still applies per-method after auth.
