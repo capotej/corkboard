@@ -180,8 +180,17 @@ python3 script/corkboard.py apply plan.json
 ```
 
 Each entry is `edits` (a list of `{old,new}`), `insert` (`{under|after|before,
-text}`), or `text`/`file` (full replace). A page that errors is reported and
-skipped; the run continues and exits non-zero if any page didn't apply.
+text}`), or `text`/`file` (full replace). A page that errors (incl. RPC failures)
+is reported as `failed` and the run **continues** — the per-page report always
+prints, and `apply` exits non-zero if any page didn't apply. Pass
+`--stop-on-first-error` to halt after the first failure.
+
+> **`apply` is not atomic.** DokuWiki has no transactions, so an entry that
+> committed before a later failure stays committed. On a partial failure, read
+> the per-page report and re-run only the entries that didn't apply — not the
+> whole plan: a bare `text`/`file` replace re-applied would overwrite whatever's
+> there now, and an `insert` would add a duplicate. (`edit` is safe to re-run: a
+> repeat no longer matches and just reports `failed`.)
 
 ### `find` — locate before you edit
 

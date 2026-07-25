@@ -87,8 +87,21 @@ def rpc_call(method, params=None):
         with urllib.request.urlopen(req, timeout=120) as r:
             obj = json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
-        return None, {"code": e.code,
-                      "message": e.read().decode("utf-8", "replace")[:300]}
+        body = e.read().decode("utf-8", "replace")[:300]
+        code, msg = e.code, body
+        try:
+            ej = json.loads(body)
+            ej = ej.get("error") if isinstance(ej, dict) else None
+            if isinstance(ej, dict):
+                # DokuWiki returns JSON-RPC application errors as HTTP 400, with
+                # the real RPC code/message nested in the body. Surface those so
+                # callers can branch on the RPC code (e.g. getPageInfo's 121) and
+                # rpc() prints [121] ... rather than a [400] JSON blob.
+                code = ej.get("code", e.code)
+                msg = ej.get("message", body)
+        except (ValueError, TypeError):
+            pass
+        return None, {"code": code, "message": msg}
     except urllib.error.URLError as e:
         return None, {"code": "network", "message": str(e)}
     return obj.get("result"), obj.get("error")

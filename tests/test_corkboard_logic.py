@@ -303,10 +303,50 @@ def test_apply_stop_on_first_error():
     check("default continue: only the failing page unsaved", set(saved_cont), {"p1", "p3"})
 
 
+def test_rpc_call_unwraps_jsonrpc_error_in_http_body():
+    # Root-cause guard for the live bug: DokuWiki returns JSON-RPC application
+    # errors (e.g. getPageInfo's code 121) as HTTP 400, with the real RPC
+    # code/message nested in the body. rpc_call must surface the nested code so
+    # _page_rev's 121 branch fires and rpc() prints [121] ... not [400] <blob>.
+    import urllib.error
+    import urllib.request
+
+    def fake_urlopen(body):
+        def _u(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request",
+                                         {}, io.BytesIO(body))
+        return _u
+
+    os.environ.setdefault("CORKBOARD_URL", "https://example.com")
+    os.environ.setdefault("CORKBOARD_USER", "u")
+    os.environ.setdefault("CORKBOARD_PASS", "p")
+    orig = urllib.request.urlopen
+    try:
+        # JSON-RPC error nested in an HTTP 400 body -> surface the RPC code/msg
+        body = json.dumps({"error": {"code": 121,
+                                     "message": "The requested page (revision) does not exist"}}).encode()
+        urllib.request.urlopen = fake_urlopen(body)
+        res, err = cb.rpc_call("core.getPageInfo", ["ghost:page"])
+        check("rpc_call surfaced nested RPC code (not HTTP 400)", err.get("code"), 121)
+        check("rpc_call surfaced nested RPC message",
+              err.get("message"), "The requested page (revision) does not exist")
+        check("rpc_call returns no result on error", res, None)
+
+        # non-JSON 400 body -> fall back to the HTTP code + raw body
+        urllib.request.urlopen = fake_urlopen(b"<html>Bad Request</html>")
+        res, err = cb.rpc_call("core.savePage", ["x"])
+        check("non-JSON body -> HTTP code preserved", err.get("code"), 400)
+        check("non-JSON body -> raw body as message",
+              err.get("message"), "<html>Bad Request</html>")
+    finally:
+        urllib.request.urlopen = orig
+
+
 def main():
     for fn in (test_apply_edits, test_heading_text, test_locate_anchor,
                test_insert_block, test_find_matching_lines, test_extract_rev,
                test_load_edits, test_page_rev_missing_page,
+               test_rpc_call_unwraps_jsonrpc_error_in_http_body,
                test_apply_resilience, test_apply_stop_on_first_error):
         fn()
     print(f"\n{_passed} passed, {_failed} failed")
