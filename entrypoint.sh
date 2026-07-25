@@ -194,16 +194,21 @@ fi
 # authenticate against the API. The agent is always provisioned, so this always
 # runs. Printed to stdout (visible via `fly logs`), backgrounded so it never
 # blocks or breaks startup.
+#
+# Uses 'localhost' (not 127.0.0.1) so the Host header is a hostname, not a
+# numeric IP -- CRS rule 920350 (Host header is numeric IP) false-positives on
+# a numeric-IP Host and would spam the WAF log (-> 980170 score summaries) on
+# every cold start. Both resolve to loopback.
 (
   set +e
   for _ in $(seq 1 30); do
-    curl -sf -o /dev/null "http://127.0.0.1/" && break
+    curl -sf -o /dev/null "http://localhost/" && break
     sleep 1
   done
   resp=$(curl -s -u "agent:${CORKBOARD_AGENT_PASS}" \
     -H 'Content-Type: application/json' \
     -d '{"jsonrpc":"2.0","method":"core.whoAmI","id":1}' \
-    http://127.0.0.1/lib/exe/jsonrpc.php 2>/dev/null || echo '(request failed)')
+    http://localhost/lib/exe/jsonrpc.php 2>/dev/null || echo '(request failed)')
   echo "[entrypoint] JSON-RPC self-test as 'agent': ${resp}") &
 
 
