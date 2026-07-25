@@ -1,7 +1,7 @@
 # HTTP gzip compression at the Apache layer (`mod_deflate`)
 
 **Date:** 2026-07-25
-**Status:** Accepted
+**Status:** Implemented
 
 ## Goal
 
@@ -169,7 +169,7 @@ gzip, and decode in both response paths:
 
 ```python
 import base64
-import gzip          # stdlib — gzip only; brotli isn't in the stdlib
+import gzip  # stdlib — gzip only; brotli isn't in the stdlib
 import json
 import os
 import re
@@ -189,15 +189,16 @@ def _gunzip_if_needed(raw, headers):
 ```
 
 ```python
+def rpc_call(method, params=None):
+    ...
     req = urllib.request.Request(
         f"{url}/lib/exe/jsonrpc.php",
         data=json.dumps(payload).encode(),
         headers={
             "Content-Type": "application/json",
             "Authorization": _b64auth(),
-            # Ask the server to gzip the response. urllib has NO transparent
-            # content-encoding handling, so we decode it below. brotli isn't in
-            # the stdlib -> gzip only.
+            # Ask the server to gzip the response. urllib has no transparent
+            # content-encoding handling, so we decode via _gunzip_if_needed.
             "Accept-Encoding": "gzip",
         },
         method="POST",
@@ -207,7 +208,7 @@ def _gunzip_if_needed(raw, headers):
             obj = json.loads(_gunzip_if_needed(r.read(), r.headers).decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         body = _gunzip_if_needed(e.read(), e.headers).decode("utf-8", "replace")[:300]
-        ...   # unchanged: try to parse the JSON-RPC error, else surface the body
+        ...  # unchanged: parse the JSON-RPC error, else surface the body
 ```
 
 `gzip.decompress` buffers the whole body, but the skill already reads the entire
@@ -301,21 +302,36 @@ Brotli stays an additive, low-lock-in option: if it's ever wanted, swap the
   through and does not compress. `mod_deflate`'s automatic `Vary:
   Accept-Encoding` keeps caching correct if a CDN is added later.
 
-## Implementation checklist
+## Implementation notes
 
-- [ ] Add `compression.conf` at repo root (contents above).
-- [ ] `Dockerfile`: extend `a2enmod` to `rewrite headers expires filter deflate`;
-      add `COPY compression.conf /etc/apache2/conf-enabled/compression.conf`.
-- [ ] `conf-seed/local.protected.php`: add `$conf['gzip_output'] = 0;`.
-- [ ] `skills/corkboard/script/corkboard.py`: add `Accept-Encoding: gzip` +
-      `_gunzip_if_needed` decode (success and HTTP-error paths) and the `gzip`
-      import. Keep it dependency-free.
-- [ ] Build, run locally, run the four verification curls above.
-- [ ] Run the skill's test harness (`python3 tests/test_corkboard_logic.py`) and
-      a live end-to-end RPC against the compressed server to confirm the agent
-      decompresses JSON-RPC responses (including a forced error path).
-- [ ] (Optional) `entrypoint.sh`: add `--compressed` to the JSON-RPC self-test
-      `curl`.
-- [ ] Deploy and re-run the verification curls against the live instance.
-- [ ] Update `README.md` to mention on-the-wire compression, and move this RFC's
-      checklist to implementation notes (per `AGENTS.md`).
+Implemented 2026-07-25. The change is build-time plus one skill edit; the gate
+is green locally (`ruff check`, `ruff format --check` over 9 files, `ty check`,
+65/65 tests). Not yet deployed — the live verification curls require a running
+instance.
+
+- **`compression.conf`** (new) — `AddOutputFilterByType DEFLATE` over the text
+  types, wrapped in `<IfModule mod_deflate.c>`.
+- **`Dockerfile`** — `a2enmod rewrite headers expires filter deflate`; added
+  `COPY compression.conf /etc/apache2/conf-enabled/compression.conf`.
+- **`conf-seed/local.protected.php`** — added `$conf['gzip_output'] = 0;` so
+  Apache stays the sole compressor and the web Configuration Manager can't flip
+  it on (which would double-encode).
+- **`skills/corkboard/script/corkboard.py`** — added the `gzip` import,
+  `Accept-Encoding: gzip` on the request, and `_gunzip_if_needed()` applied to
+  **both** the success and `HTTPError` bodies (mod_deflate compresses error
+  responses too). Stays dependency-free.
+- **`README.md`** — added a Features bullet and a `compression.conf` row in
+  "What's here".
+
+### Notes / deviations
+
+- **The RFC's own Python fences are `ruff format`-clean.** ruff 0.16 formats
+  Python inside ` ``` ` fences in `.md`, so the illustrative snippets here are
+  kept format-clean (the `rpc_call` snippet is shown as a function body for
+  natural indentation).
+- **Not done here (needs a live instance):** build the image and run the four
+  verification curls (Brotli clients fall back to `gzip`; CSS gzipped exactly
+  once; JSON-RPC gzipped; pages gzipped), then deploy.
+- **Optional, deferred:** the `entrypoint.sh` JSON-RPC self-test `curl` carries
+  no `Accept-Encoding`, so it already stays readable; adding `--compressed` is
+  left for a future tidy-up.

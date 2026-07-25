@@ -27,3 +27,9 @@ $conf['remoteuser'] = '@api,@admin';
 // release and disable popularity reporting via plugins.local.php; turning
 // this off too keeps the wiki from making outbound calls it doesn't need.
 $conf['updatecheck'] = 0;
+
+// Apache (mod_deflate) is the sole on-the-wire compressor; DokuWiki must not
+// also gzip its own output (it would double-encode pages and CSS/JS). The
+// default is already 0; locked here so the web Configuration Manager can't flip
+// it on. See rfcs/2026-07-25_http-compression.md.
+$conf['gzip_output'] = 0;

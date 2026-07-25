@@ -14,6 +14,7 @@ What Corkboard ships with out of the box:
 - **Corkboard RPC plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that gives the agent single-call answers the core API can't: wanted/orphan pages, unreferenced media, per-page **link health**, and **compare-and-swap** writes (so a surgical edit never silently clobbers a concurrent one).
 - **Agent skill** — a stdlib-only Python skill (`skills/corkboard/`) the agent uses to read, write, organize, and garden the wiki — including **surgical** in-place edits and anchor inserts, in-page search, and batch edits across pages. See `skills/corkboard/SKILL.md`.
 - **No phone-home** — `updatecheck=0`; the `popularity` plugin is disabled.
+- **Gzip over the wire** — Apache (`mod_deflate`) compresses text responses for browsers and the agent; the skill sends `Accept-Encoding: gzip` and decodes it. DokuWiki does no encoding of its own (`gzip_output=0`).
 - **Flat-file on a Fly volume** — no database; survives restarts and redeploys; ~0.7 s warm resume, ~7 s cold start.
 
 ## What this is
@@ -42,6 +43,7 @@ directories onto that volume on every boot — see
 | `skills/corkboard/`         | The agent skill: a Python JSON-RPC client (`script/corkboard.py`) + `SKILL.md` |
 | `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): wanted/orphans/media-orphans, per-page link health, and compare-and-swap writes |
 | `apache-deny-sensitive.conf`| Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/`              |
+| `compression.conf`         | Gzip text responses over the wire (`mod_deflate`); DokuWiki stays uncompressed (`gzip_output=0`) |
 | `dokuwiki-opcache.ini`      | Sizes PHP OPcache (preload disabled — see cold-start notes)             |
 | `.dockerignore`             | Keeps build context lean                                                 |
 

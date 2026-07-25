@@ -38,6 +38,7 @@ Examples:
 
 import argparse
 import base64
+import gzip
 import json
 import os
 import re
@@ -58,6 +59,18 @@ def _cfg():
 def _b64auth():
     _, user, pw = _cfg()
     return "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
+
+
+def _gunzip_if_needed(raw, headers):
+    """Decode a response body, gunzipping when the server used Content-Encoding.
+
+    urllib has no transparent content-encoding handling (unlike requests/curl),
+    so we ask for gzip (Accept-Encoding in rpc_call) and decode it here. Applied
+    to both 200 and 4xx bodies: mod_deflate compresses error responses too.
+    """
+    if "gzip" in headers.get("Content-Encoding", "").lower():
+        return gzip.decompress(raw)
+    return raw
 
 
 def rpc_call(method, params=None):
@@ -88,14 +101,20 @@ def rpc_call(method, params=None):
     req = urllib.request.Request(
         f"{url}/lib/exe/jsonrpc.php",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "Authorization": _b64auth()},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": _b64auth(),
+            # Ask the server to gzip the response. urllib has no transparent
+            # content-encoding handling, so we decode it in _gunzip_if_needed.
+            "Accept-Encoding": "gzip",
+        },
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
-            obj = json.loads(r.read().decode("utf-8", "replace"))
+            obj = json.loads(_gunzip_if_needed(r.read(), r.headers).decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "replace")[:300]
+        body = _gunzip_if_needed(e.read(), e.headers).decode("utf-8", "replace")[:300]
         code, msg = e.code, body
         try:
             ej = json.loads(body)

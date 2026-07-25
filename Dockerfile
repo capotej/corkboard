@@ -26,8 +26,9 @@ RUN set -eux; \
     docker-php-ext-install -j"$(nproc)" gd zip intl; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
 
-# Enable Apache rewrite module (DokuWiki nice URLs / .htaccess support).
-RUN a2enmod rewrite headers expires
+# Enable Apache modules. rewrite = nice URLs/.htaccess; headers/expires = cache
+# headers; filter+deflate = on-the-wire gzip (rfcs/2026-07-25_http-compression.md).
+RUN a2enmod rewrite headers expires filter deflate
 
 # Download and extract DokuWiki into the webroot.
 RUN set -eux; \
@@ -53,6 +54,9 @@ COPY conf-seed/ /usr/local/share/dokuwiki-seed/
 # Defense-in-depth: block direct HTTP access to data/conf/bin/inc regardless
 # of .htaccess / AllowOverride behaviour (protects users.auth.php, etc.).
 COPY apache-deny-sensitive.conf /etc/apache2/conf-enabled/dokuwiki-security.conf
+
+# On-the-wire gzip compression of text responses (mod_deflate).
+COPY compression.conf /etc/apache2/conf-enabled/compression.conf
 
 # OPcache tuning (build-time only, zero per-boot cost). Sizes opcache for fast
 # cold starts; preload is intentionally disabled in the ini (it broke runtime
