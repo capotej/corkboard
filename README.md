@@ -11,8 +11,8 @@ What Corkboard ships with out of the box:
 - **Login-only (closed by default)** — anonymous access is denied (`@ALL 0`); reading or writing requires a login. No self-registration, no password resets.
 - **JSON-RPC API** — DokuWiki's Remote API is enabled and restricted to the `@api`/`@admin` groups, for programmatic read/write over HTTP Basic auth.
 - **All safe upload formats** — ~150 file types allowed (text, source code, data/config, archives, fonts, e-books, …); `html`/`htm` are blocked (XSS vector).
-- **Corkboard RPC plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that returns wanted/orphan pages and unreferenced media in a single call.
-- **Agent skill** — a stdlib-only Python skill (`skills/corkboard/`) an agent uses to create and maintain content in the wiki: write and organize pages, upload media, search, and keep links healthy (fast wanted/orphans/media-orphans lookup via the Corkboard RPC plugin).
+- **Corkboard RPC plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that gives the agent single-call answers the core API can't: wanted/orphan pages, unreferenced media, per-page **link health**, and **compare-and-swap** writes (so a surgical edit never silently clobbers a concurrent one).
+- **Agent skill** — a stdlib-only Python skill (`skills/corkboard/`) the agent uses to read, write, organize, and garden the wiki — including **surgical** in-place edits and anchor inserts, in-page search, and batch edits across pages. See `skills/corkboard/SKILL.md`.
 - **No phone-home** — `updatecheck=0`; the `popularity` plugin is disabled.
 - **Flat-file on a Fly volume** — no database; survives restarts and redeploys; ~0.7 s warm resume, ~7 s cold start.
 
@@ -23,7 +23,7 @@ an **agent** over DokuWiki's [JSON-RPC Remote API](https://www.dokuwiki.org/deve
 (`core.*` methods, HTTP Basic auth). The bundled skill is the agent's transport;
 the `agent` user (groups `user,api`) is its identity. Humans still have the full
 web UI (log in as `admin`), but the first-class workflow is programmatic: an
-agent creates pages, uploads files, and gardens links.
+agent creates and surgically edits pages, uploads files, and gardens links.
 
 Because DokuWiki is flat-file, a single persistent Fly volume holds everything.
 Fly machines are ephemeral, so `entrypoint.sh` relocates DokuWiki's writable
@@ -40,7 +40,7 @@ directories onto that volume on every boot — see
 | `conf-seed/`                | Locked-down config templates: closed ACL, `useacl`, JSON-RPC, disabled plugins, broad upload allowlist |
 | `bootstrap-user.php`        | Creates the `admin` and `agent` accounts from Fly secrets (bcrypt, idempotent) |
 | `skills/corkboard/`         | The agent skill: a Python JSON-RPC client (`script/corkboard.py`) + `SKILL.md` |
-| `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): fast wanted/orphans/media-orphans for the agent |
+| `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): wanted/orphans/media-orphans, per-page link health, and compare-and-swap writes |
 | `apache-deny-sensitive.conf`| Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/`              |
 | `dokuwiki-opcache.ini`      | Sizes PHP OPcache (preload disabled — see cold-start notes)             |
 | `.dockerignore`             | Keeps build context lean                                                 |
@@ -151,6 +151,26 @@ export CORKBOARD_PASS='<the CORKBOARD_AGENT_PASS value>'
 
 The agent then uses the skill to read/write pages, upload media, search, and
 garden links — see `skills/corkboard/SKILL.md` for the full command reference.
+
+### What the agent can do (why it's "agentic")
+
+Because the agent is a first-class writer — not a human pasting into a browser —
+the skill is built around **small, safe, targeted edits** rather than whole-page
+rewrites (the bulk of real wiki work):
+
+- **Surgical edits** — replace an exact snippet *only if it occurs once*; a
+  zero- or multi-match aborts and saves nothing, so an edit never lands in the
+  wrong place.
+- **Anchor inserts** — add content under a heading, or after/before a specific line.
+- **In-page search** with line numbers, to find the right anchor before editing.
+- **Batch edits** across several pages from one plan, with a per-page report.
+- **Concurrency-safe writes** — every surgical write is a compare-and-swap: if
+  the page changed under the agent, it refuses to clobber and says so.
+- **Link health after every write** — right after a save, the agent is told if it
+  just created a broken link, instead of finding out later in a `wanted` report.
+
+The last two lean on the bundled Corkboard RPC plugin (`plugin.corkboard.cas`
+and `.linkhealth`), which answers in a single server-side call.
 
 ### Pointing your agent at the wiki (AGENTS.md)
 
