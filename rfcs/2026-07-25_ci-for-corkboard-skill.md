@@ -1,7 +1,7 @@
 # CI for the bundled Corkboard skill: lint, type-check, and tests via mise
 
 **Date:** 2026-07-25
-**Status:** Accepted
+**Status:** Implemented
 
 ## Goal
 
@@ -182,8 +182,9 @@ gh api repos/jdx/mise-action/commits/v4.2.0 --jq '.sha'
 
 ## Migration notes
 
-- **New files only** (`ruff.toml`, `.github/workflows/ci.yml`) plus three lines
-  in `mise.toml`. No existing files change shape.
+- New files (`ruff.toml`, `.github/workflows/ci.yml`) plus additions to
+  `mise.toml`. The existing skill helper and test harness were reformatted to
+  clear the lint gate (see Implementation notes) — behavior unchanged.
 - The workflow runs only on `push` to `main` and on PRs — it will not fire on
   tag pushes or other branches.
 - First run: the existing code may surface a few ruff findings (the test file
@@ -191,23 +192,50 @@ gh api repos/jdx/mise-action/commits/v4.2.0 --jq '.sha'
   `ruff check --fix .` locally and resolve the rest so the gate starts green.
   ty is expected to be quiet given the lack of annotations (Decision #6 note).
 
-## Implementation checklist
+## Implementation notes
 
-- [ ] Add `python = "3.13"`, `ruff`, `ty` to `mise.toml`; run `mise install`
-      locally to confirm both resolve (ty via `aqua:astral-sh/ty`).
-- [ ] Add root `ruff.toml` (config block above).
-- [ ] Resolve/confirm the `actions/checkout@v5` and `jdx/mise-action@v4.2.0`
-      SHAs via `gh api ...`.
-- [ ] Add `.github/workflows/ci.yml`.
-- [ ] Run `ruff check --fix .` and `ruff check .` locally; fix remaining
-      violations so the gate is green on the first CI run.
-- [ ] Run `ty check skills/corkboard/script` locally; address any findings.
-- [ ] Run `python3 tests/test_corkboard_logic.py` locally; confirm it still
-      passes.
-- [ ] Push, open PR, confirm all three steps are green.
-- [ ] Add a short **CI / Python tooling** section to `AGENTS.md` noting:
-      ruff+ty are mise tools (`mise install`), config is `ruff.toml`, tests run
-      via `python3 tests/test_corkboard_logic.py`, and there is no `uv`/`pyproject`.
-- [ ] On acceptance, update this RFC's Status to `Implemented`, replace this
-      checklist with implementation notes, and reflect the new workflow in
-      `README.md` per the AGENTS.md RFC rules.
+Implemented 2026-07-25. The gate is live and green locally; CI runs on push/PR.
+
+- **`mise.toml`** — added `python = "3.13"`, `ruff = "0.16.0"`, `ty = "0.0.63"`
+  alongside `php`. `mise install` resolves all three (ty via `aqua:astral-sh/ty`).
+  Versions pinned to the exact resolutions at implementation time.
+- **`ruff.toml`** — added at repo root (`line-length = 99`, `target-version = "py313"`,
+  `select = ["E","F","I","UP","B","SIM"]`).
+- **`.github/workflows/ci.yml`** — added. Action SHAs resolved live via `git ls-remote`
+  (the runner's `gh` is unauthenticated): `actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5`
+  and `jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0`. (The
+  checkout SHA differs from the P002 table placeholder — resolved, not copied.)
+- **`AGENTS.md`** — added a "Python tooling & CI" section.
+- **`README.md`** — added a "Tests & CI" subsection under "The agent + the bundled skill".
+
+### Lint pass on the existing code
+
+`ruff check .` initially reported **49** violations across the helper and tests.
+Resolved with **zero `ignore`/`noqa` additions** — the gate is genuinely clean:
+
+- Auto-fixed import style (E401 multiple-imports-on-one-line, I001 unsorted) on the helper.
+- Reformatted the compact `add_argument(...); add_argument(...)` argparse block to one
+  statement per line (E702), which also retired the attendant E501s.
+- Renamed the `list` subparser's variable `l` → `lst` (E741 ambiguous name); purely
+  internal, no CLI change (verified with `--help`).
+- Added `strict=False` to one `zip(...)` whose lengths are already guarded equal (B905).
+- Wrapped ~20 long `add_argument`/`add_parser` `help=` lines and three standalone long
+  lines (a docstring, an `avail = …` expression, a `print`) to ≤ 99 chars, plus two long
+  lines in the test harness.
+
+`ruff format` was considered and **rejected**: it would churn ~235 lines of unrelated
+style changes (slicing spacing, `for x in (y or [])`, comment alignment, regex quotes)
+across the logic functions — an unfocused diff for a task whose scope is the CI gate.
+Surgical fixes keep the diff to actual violations only.
+
+### ty
+
+`ty check skills/corkboard/script` passes clean. As predicted in Decision #6, the
+helper has no type annotations, so ty is a light pass today; the gate is established
+for when annotations arrive.
+
+### Tests
+
+`python3 tests/test_corkboard_logic.py` → **65 passed, 0 failed.** The argparse
+reformatting is not covered by the suite, so the wiring was verified separately with
+`corkboard.py --help` / `edit --help` / `list --help`.

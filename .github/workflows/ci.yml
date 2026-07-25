@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# contents: read is enough for mise-action to download GitHub-backend tool
+# releases (ruff/ty) using the default GITHUB_TOKEN. No explicit token: input.
+permissions:
+  contents: read
+
+jobs:
+  skill:
+    name: Lint, type-check & test the corkboard skill
+    runs-on: ubuntu-latest
+    steps:
+      # P002: every third-party action is SHA-pinned with a version comment.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Setup mise
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+      # All three tools below (python, ruff, ty) come from mise.toml via the
+      # step above — there are no setup-python / setup-uv / curl installs.
+      - name: Ruff check
+        run: ruff check .
+      - name: ty check
+        run: ty check skills/corkboard/script
+      - name: Tests
+        run: python3 tests/test_corkboard_logic.py

@@ -1,0 +1,15 @@
+# Single config surface for ruff. This repo has no pyproject.toml (it is not a
+# Python project — see rfcs/2026-07-25_ci-for-corkboard-skill.md, Decision #2),
+# so ruff is configured here instead of in [tool.ruff]. Do NOT add a .ruff.toml
+# alias — this file is the only home for ruff config.
+#
+# ruff and target-version track the mise-managed interpreter (mise.toml:
+# python = "3.13"). Rule set adopted from the P011 reference.
+
+line-length = 99
+target-version = "py313"
+
+[lint]
+# pyflakes (F) + pycodestyle (E/W) + isort (I) + pyupgrade (UP) + bugbear (B)
+# + simplify (SIM) — one select list replacing half a dozen flake8 plugins.
+select = ["E", "F", "I", "UP", "B", "SIM"]

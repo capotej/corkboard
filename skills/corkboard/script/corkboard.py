@@ -35,8 +35,14 @@ Examples:
   corkboard.py media-get ns:diag.png -o diag.png        # download
   corkboard.py raw core.getMediaInfo '["ns:diag.png"]'  # escape hatch
 """
-import argparse, base64, json, os, re, sys
-import urllib.error, urllib.request
+import argparse
+import base64
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
 
 
 def _cfg():
@@ -56,7 +62,8 @@ def _b64auth():
 def rpc_call(method, params=None):
     """Call a JSON-RPC method (positional params). Returns (result, err), where
     err is {code, message} on failure and None on success — JSON-RPC application
-    errors AND HTTP/network failures are normalized to the same shape. Does NOT exit — callers decide.
+    errors AND HTTP/network failures are normalized to the same shape. Does NOT
+    exit — callers decide.
     rpc() wraps this and exits on error; reach for rpc_call() directly when a
     specific error is expected and recoverable (e.g. getPageInfo's code 121 on a
     missing page).
@@ -453,7 +460,9 @@ def locate_anchor(lines, kind, val):
         heads = [(i, _heading_text(ln)) for i, ln in enumerate(lines) if _heading_text(ln)]
         hits = [(i, t) for i, t in heads if t == val]
         if not hits:
-            avail = "\n".join(f"  L{i + 1}: {t}" for i, t in heads) or "  (no headings on this page)"
+            avail = (
+                "\n".join(f"  L{i + 1}: {t}" for i, t in heads) or "  (no headings on this page)"
+            )
             raise ValueError(f"no heading exactly named {val!r}. Headings:\n{avail}")
         if len(hits) > 1:
             raise ValueError(f"heading {val!r} appears {len(hits)} times — ambiguous")
@@ -522,7 +531,8 @@ def _show_context(content, edits, ctx=2):
             mark = ">" if (n + 1) == lineno else " "
             print(f"{mark}{n + 1:>5}│{lines[n]}")
         if count > 1:
-            print(f"  ⚠ ambiguous ({count} matches) — add context to --old so it's unique before saving")
+            print(f"  ⚠ ambiguous ({count} matches) — add context to --old "
+                  "so it's unique before saving")
         print()
     print("(--show-context: nothing saved)")
 
@@ -747,19 +757,41 @@ def main():
     sp.add_parser("get", help="print raw wikitext of a page").add_argument("page")
 
     p = sp.add_parser("put", help="write a page (create/replace) via core.savePage")
-    p.add_argument("page"); p.add_argument("--file"); p.add_argument("--text"); p.add_argument("--sum", default="")
-    p.add_argument("--rev", help="compare-and-swap: only save if current rev matches (from getPageInfo)")
-    p.add_argument("--check", dest="check", action="store_true", default=False, help="run a post-write link-health check")
+    p.add_argument("page")
+    p.add_argument("--file")
+    p.add_argument("--text")
+    p.add_argument("--sum", default="")
+    p.add_argument(
+        "--rev", help="compare-and-swap: only save if current rev matches (from getPageInfo)",
+    )
+    p.add_argument(
+        "--check", dest="check", action="store_true", default=False,
+        help="run a post-write link-health check",
+    )
 
     a = sp.add_parser("append", help="append text to a page via core.appendPage")
-    a.add_argument("page"); a.add_argument("--file"); a.add_argument("--text"); a.add_argument("--sum", default="")
-    a.add_argument("--check", dest="check", action="store_true", default=False, help="run a post-write link-health check")
+    a.add_argument("page")
+    a.add_argument("--file")
+    a.add_argument("--text")
+    a.add_argument("--sum", default="")
+    a.add_argument(
+        "--check", dest="check", action="store_true", default=False,
+        help="run a post-write link-health check",
+    )
 
-    d = sp.add_parser("delete", help="clear page content (empty savePage — an update; token has no delete perm)")
-    d.add_argument("page"); d.add_argument("--sum", default="cleared")
+    d = sp.add_parser(
+        "delete",
+        help="clear page content (empty savePage — an update; token has no delete perm)",
+    )
+    d.add_argument("page")
+    d.add_argument("--sum", default="cleared")
 
-    l = sp.add_parser("list", help="list page ids in a namespace (recursive by default)")
-    l.add_argument("ns"); l.add_argument("--depth", type=int, default=0, help="0 = recursive (default); N = descend N levels")
+    lst = sp.add_parser("list", help="list page ids in a namespace (recursive by default)")
+    lst.add_argument("ns")
+    lst.add_argument(
+        "--depth", type=int, default=0,
+        help="0 = recursive (default); N = descend N levels",
+    )
 
     sp.add_parser("all", help="list every page id")
 
@@ -767,12 +799,15 @@ def main():
     sp.add_parser("version", help="DokuWiki version")
 
     mu = sp.add_parser("media-upload", help="upload a file via core.saveMedia (binary or text)")
-    mu.add_argument("file"); mu.add_argument("ns"); mu.add_argument("name")
+    mu.add_argument("file")
+    mu.add_argument("ns")
+    mu.add_argument("name")
     mu.add_argument("--no-overwrite", dest="overwrite", action="store_false", default=True,
                     help="fail instead of overwriting an existing media id")
 
     mg = sp.add_parser("media-get", help="download a media file via core.getMedia")
-    mg.add_argument("mediaid"); mg.add_argument("-o", "--out")
+    mg.add_argument("mediaid")
+    mg.add_argument("-o", "--out")
 
     ml = sp.add_parser("media-list", help="list media ids in a namespace")
     ml.add_argument("ns")
@@ -792,45 +827,96 @@ def main():
     bl = sp.add_parser("backlinks", help="pages linking TO a page")
     bl.add_argument("page")
 
-    sm = sp.add_parser("sitemap", help="page tree in ONE call (core.listPages) — bird's-eye view + placement")
+    sm = sp.add_parser(
+        "sitemap",
+        help="page tree in ONE call (core.listPages) — bird's-eye view + placement",
+    )
     sm.add_argument("--ns", default="", help="scope to a namespace")
-    sm.add_argument("--depth", type=int, default=0, help="0 = full tree (default); N = collapse beyond N levels")
-    sm.add_argument("--json", dest="as_json", action="store_true", help="emit nested JSON instead of an ASCII tree")
+    sm.add_argument(
+        "--depth", type=int, default=0,
+        help="0 = full tree (default); N = collapse beyond N levels",
+    )
+    sm.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="emit nested JSON instead of an ASCII tree",
+    )
 
     f = sp.add_parser("find", help="in-page search with line numbers (grep -n style)")
-    f.add_argument("page"); f.add_argument("pattern")
+    f.add_argument("page")
+    f.add_argument("pattern")
     f.add_argument("-E", "--regex", action="store_true", help="treat pattern as a Python regex")
-    f.add_argument("-i", "--ignore-case", dest="ignore_case", action="store_true", help="case-insensitive match")
+    f.add_argument(
+        "-i", "--ignore-case", dest="ignore_case", action="store_true",
+        help="case-insensitive match",
+    )
 
-    e = sp.add_parser("edit", help="surgical in-place edit: replace exact --old with --new (asserts a unique match)")
+    e = sp.add_parser(
+        "edit",
+        help="surgical in-place edit: replace exact --old with --new (asserts a unique match)",
+    )
     e.add_argument("page")
-    e.add_argument("--old", action="append", default=[], metavar="OLD", help="text to find (repeatable; pairs with the next --new)")
-    e.add_argument("--new", action="append", default=[], metavar="NEW", help="replacement (repeatable; pairs with the preceding --old)")
-    e.add_argument("--edits", metavar="FILE", help="JSON file [{old,new},...] (alternative to --old/--new)")
+    e.add_argument(
+        "--old", action="append", default=[], metavar="OLD",
+        help="text to find (repeatable; pairs with the next --new)",
+    )
+    e.add_argument(
+        "--new", action="append", default=[], metavar="NEW",
+        help="replacement (repeatable; pairs with the preceding --old)",
+    )
+    e.add_argument(
+        "--edits", metavar="FILE",
+        help="JSON file [{old,new},...] (alternative to --old/--new)",
+    )
     e.add_argument("--sum", default="")
-    e.add_argument("--show-context", action="store_true", help="preview each match + line numbers; save nothing")
-    e.add_argument("--no-check", dest="check", action="store_false", default=True, help="skip the post-write link-health check")
-    e.add_argument("--no-cas", dest="cas", action="store_false", default=True, help="skip concurrency-safe compare-and-swap (allow a blind overwrite)")
+    e.add_argument(
+        "--show-context", action="store_true",
+        help="preview each match + line numbers; save nothing",
+    )
+    e.add_argument(
+        "--no-check", dest="check", action="store_false", default=True,
+        help="skip the post-write link-health check",
+    )
+    e.add_argument(
+        "--no-cas", dest="cas", action="store_false", default=True,
+        help="skip concurrency-safe compare-and-swap (allow a blind overwrite)",
+    )
 
-    ins = sp.add_parser("insert", help="insert text at an anchor (--under HEADING | --after LINE | --before LINE)")
+    ins = sp.add_parser(
+        "insert",
+        help="insert text at an anchor (--under HEADING | --after LINE | --before LINE)",
+    )
     ins.add_argument("page")
     g = ins.add_mutually_exclusive_group(required=True)
-    g.add_argument("--under", metavar="HEADING", help="insert right after the heading named HEADING")
+    g.add_argument(
+        "--under", metavar="HEADING",
+        help="insert right after the heading named HEADING",
+    )
     g.add_argument("--after", metavar="LINE", help="insert after the unique line containing LINE")
-    g.add_argument("--before", metavar="LINE", help="insert before the unique line containing LINE")
-    ins.add_argument("--file"); ins.add_argument("--text"); ins.add_argument("--sum", default="")
+    g.add_argument(
+        "--before", metavar="LINE",
+        help="insert before the unique line containing LINE",
+    )
+    ins.add_argument("--file")
+    ins.add_argument("--text")
+    ins.add_argument("--sum", default="")
     ins.add_argument("--no-check", dest="check", action="store_false", default=True)
     ins.add_argument("--no-cas", dest="cas", action="store_false", default=True)
 
-    ap_apply = sp.add_parser("apply", help="apply edits/inserts/replaces across pages from a JSON plan")
+    ap_apply = sp.add_parser(
+        "apply",
+        help="apply edits/inserts/replaces across pages from a JSON plan",
+    )
     ap_apply.add_argument("file")
     ap_apply.add_argument("--no-check", dest="check", action="store_false", default=True)
     ap_apply.add_argument("--no-cas", dest="cas", action="store_false", default=True)
-    ap_apply.add_argument("--stop-on-first-error", dest="stop_on_first_error", action="store_true",
-                          help="abort after the first failed entry (default: continue and report all)")
+    ap_apply.add_argument(
+        "--stop-on-first-error", dest="stop_on_first_error", action="store_true",
+        help="abort after the first failed entry (default: continue and report all)",
+    )
 
     raw = sp.add_parser("raw", help="escape hatch: call any JSON-RPC method")
-    raw.add_argument("method"); raw.add_argument("params", help="JSON array of params", nargs="?", default="[]")
+    raw.add_argument("method")
+    raw.add_argument("params", help="JSON array of params", nargs="?", default="[]")
 
     args = ap.parse_args()
     if args.cmd == "get":
@@ -901,7 +987,7 @@ def main():
         if args.old:
             if len(args.old) != len(args.new):
                 sys.exit("corkboard: --old and --new must appear the same number of times")
-            edits += list(zip(args.old, args.new))
+            edits += list(zip(args.old, args.new, strict=False))
         if not edits:
             sys.exit("corkboard: edit needs at least one --old/--new pair (or --edits FILE)")
         cmd_edit(args.page, edits, args.sum, args.show_context, args.check, args.cas)

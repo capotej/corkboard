@@ -113,7 +113,8 @@ def test_locate_anchor():
           cb.locate_anchor(lines, "before", "Notes"), 3)
 
     check_raises("under missing lists candidates",
-                 lambda: cb.locate_anchor(lines, "under", "Nope"), "no heading", "Lessons", "Notes")
+                 lambda: cb.locate_anchor(lines, "under", "Nope"),
+                 "no heading", "Lessons", "Notes")
 
     ambig = ["== A ==", "x", "== A =="]
     check_raises("under ambiguous",
@@ -323,8 +324,12 @@ def test_rpc_call_unwraps_jsonrpc_error_in_http_body():
     orig = urllib.request.urlopen
     try:
         # JSON-RPC error nested in an HTTP 400 body -> surface the RPC code/msg
-        body = json.dumps({"error": {"code": 121,
-                                     "message": "The requested page (revision) does not exist"}}).encode()
+        body = json.dumps({
+            "error": {
+                "code": 121,
+                "message": "The requested page (revision) does not exist",
+            },
+        }).encode()
         urllib.request.urlopen = fake_urlopen(body)
         res, err = cb.rpc_call("core.getPageInfo", ["ghost:page"])
         check("rpc_call surfaced nested RPC code (not HTTP 400)", err.get("code"), 121)

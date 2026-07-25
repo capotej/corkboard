@@ -3,3 +3,10 @@
 # and runs match production. Install with:  mise install
 [tools]
 php = "8.5.8"
+# Python toolchain for the bundled `corkboard` skill: stdlib-only helper + a
+# dependency-free test harness. ruff (lint, P011) and ty (type-check, P012) are
+# non-Python tools -> declared here, not in any Python manifest (no pyproject).
+# Installed in CI by jdx/mise-action (P016). Install locally:  mise install
+python = "3.13"
+ruff = "0.16.0"
+ty = "0.0.63"

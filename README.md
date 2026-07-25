@@ -132,6 +132,31 @@ your agent with:
 npx skills add capotej/corkboard --skill corkboard
 ```
 
+### Tests & CI
+
+The skill helper ships a **stdlib-only** test suite (no live wiki, no
+credentials) covering its pure-string logic — exact-match edits, anchor
+placement, CAS revision handling. Run it locally:
+
+```bash
+python3 tests/test_corkboard_logic.py
+```
+
+CI (`.github/workflows/ci.yml`) runs that suite plus a lint pass (`ruff`) and a
+type-check pass (`ty`) on every push and pull request. The toolchain — `python`,
+`ruff`, `ty` — is declared in `mise.toml` and installed in CI by `mise-action`,
+so local and CI run identical versions:
+
+```bash
+mise install                          # python, ruff, ty (and php)
+ruff check .                          # lint
+ty check skills/corkboard/script      # type-check the helper
+python3 tests/test_corkboard_logic.py # tests
+```
+
+This isn't a Python project (no `pyproject.toml` / `uv`); ruff config lives in
+`ruff.toml`. See `rfcs/2026-07-25_ci-for-corkboard-skill.md`.
+
 ### Auth env vars the skill needs
 
 The skill never hardcodes credentials — it reads three env vars. **They map 1:1

@@ -28,6 +28,23 @@ This repository is managed with **jujutsu (`jj`)**. Do **not** run `git`
 commands directly — use the `jj` skill / `jj ...` equivalents. See the global
 agent rules and the `jj` skill for the command mapping.
 
+## Python tooling & CI (the `corkboard` skill)
+
+The bundled `corkboard` skill is a **stdlib-only** Python helper
+(`skills/corkboard/script/corkboard.py`) plus a dependency-free test harness
+(`tests/test_corkboard_logic.py`). This repo is **not** a Python project — there
+is no `pyproject.toml`, no `uv`, no `pip`. Tool versions come from `mise.toml`.
+
+- **Install the toolchain:** `mise install` (provides `python`, `ruff`, `ty`, `php`).
+- **Run tests:** `python3 tests/test_corkboard_logic.py` (a hand-rolled harness; no pytest).
+- **Lint:** `ruff check .` — config lives in `ruff.toml` (the single config surface, since there's no `pyproject.toml`).
+- **Type-check:** `ty check skills/corkboard/script` (zero-config; point at the source, not `.`).
+
+CI (`.github/workflows/ci.yml`) runs all three on every push/PR, with the
+toolchain installed by `jdx/mise-action` straight from `mise.toml`. The skill
+has **no type annotations** today, so `ty` is a light pass that grows in value
+as annotations are added.
+
 ## RFCs
 
 Significant changes, architectural decisions, and new features should be proposed as RFCs in the `rfcs/` directory. RFCs use the format `rfcs/YYYY-MM-DD_short_title.md` with the following structure:
