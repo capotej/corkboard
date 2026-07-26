@@ -107,6 +107,11 @@ COPY compression.conf /etc/apache2/conf-enabled/compression.conf
 # Offload media delivery from PHP to Apache (mod_xsendfile).
 COPY xsendfile.conf /etc/apache2/conf-enabled/xsendfile.conf
 
+# Strip the orphaned `Pragma: no-cache` that PHP's session cache_limiter
+# injects on media responses (sendFile overrides Cache-Control/Expires but
+# not Pragma). Scoped to the media endpoint so pages stay uncacheable.
+COPY media-cache-headers.conf /etc/apache2/conf-enabled/media-cache-headers.conf
+
 # Clean URLs (mod_rewrite) — DokuWiki's canonical rewrite rules in server config
 # (not .htaccess). Pairs with userewrite=2 + useslash=1 in local.protected.php.
 # (rfcs/2026-07-25_clean-urls-mod-rewrite.md)

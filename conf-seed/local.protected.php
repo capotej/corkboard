@@ -44,6 +44,14 @@ $conf['updatecheck'] = 0;
 // it on. See rfcs/2026-07-25_http-compression.md.
 $conf['gzip_output'] = 0;
 
+// Emit HTTP cache headers (ETag, Last-Modified) and answer conditional GETs
+// with 304 Not Modified, so browsers and any fronting cache revalidate
+// unchanged pages, CSS, JS, and media instead of re-downloading them. This is
+// DokuWiki's default; locked here so the web Configuration Manager can't turn
+// it off (which would force a full re-fetch on every request). The sibling of
+// gzip_output above — both live in inc/httputils.php's http_cached_finish.
+$conf['sendcache'] = 1;
+
 // Offload media delivery to Apache's mod_xsendfile. 2 = the X-Sendfile header
 // (Apache); the module (libapache2-mod-xsendfile) and xsendfile.conf must ship
 // with the image — if they don't, this leaks the internal path and breaks
