@@ -90,9 +90,19 @@ wrong means CRS silently runs with wrong defaults.
 - **`SecRequestBodyAccess On`** (default in `modsecurity.conf-recommended`). Without
   it, mod_security never sees POST bodies — which is the whole point here, since
   page content arrives as a JSON-RPC POST body. Phase 1 is useless without it.
-- **`SecRequestBodyLimit`** (default ~13 MB in the recommended conf). DokuWiki
-  media uploads can exceed this; an oversized body is rejected before inspection.
-  A Phase-1/2 tuning item: exempt the media-upload endpoints or raise the limit.
+- **`SecRequestBodyLimit` and `SecRequestBodyNoFilesLimit`.** Two distinct ceilings,
+  and the smaller one is the trap. `SecRequestBodyLimit` (default ~13 MB) caps the
+  whole body; `SecRequestBodyNoFilesLimit` caps the *non-file* portion (form
+  fields + JSON) and defaults to only **1 MB**. The corkboard agent uploads media
+  via JSON-RPC `core.saveMedia`, base64-encoding the file **inside the JSON body**
+  (not a multipart file part), so the entire payload is "no files data" and a
+  1.0 MB file (~1.3 MB base64) is rejected at the 1 MB default — even in
+  DetectionOnly (size limits are protocol-level, not rule matches, so they fire
+  regardless of engine mode). All agent traffic is JSON-RPC with zero multipart
+  parts, so the files/no-files split carries no information for this workload;
+  `modsecurity.conf` sets `SecRequestBodyNoFilesLimit` to track
+  `SecRequestBodyLimit`. This was the first real Phase-1 finding (a blocker, not
+  a Phase-2 tuning item).
 
 ### Where the detection data lands (no new persistence)
 
@@ -243,9 +253,15 @@ SecRequestBodyAccess On
 # Inbound is where the value is.
 SecResponseBodyAccess Off
 
-# Store request bodies up to this size; oversize is rejected before inspection.
-# Default ~13 MB. Watch this against DokuWiki media uploads (Phase-1 tuning item).
+# Overall body ceiling; oversize is rejected before inspection. ~13 MiB.
 SecRequestBodyLimit 13107200
+# Cap on the NON-file portion of the body (form fields + JSON). mod_security's
+# default is only 1 MiB, and the agent's core.saveMedia uploads base64-encode the
+# file INSIDE the JSON body (no multipart file parts), so the whole payload is
+# "no files data" and was rejected at 1.0 MiB files -- even in DetectionOnly.
+# Set it to track SecRequestBodyLimit; all agent traffic is JSON-RPC (zero
+# multipart parts), so the files/no-files split is meaningless here. Bump together.
+SecRequestBodyNoFilesLimit 13107200
 
 # Audit log OFF by default: detection signal goes to the error log -> Fly ->
 # Grafana (already durable). Escalation path in the RFC (Decision #5).
@@ -356,9 +372,7 @@ only on that list.
   pass. DokuWiki's own escaping is the primary defense; CRS is the backstop.
 - **WAF ≠ access control.** CRS inspects content; it does not replace DokuWiki's
   ACL (`@ALL 0`, `@api`/`@admin` gate on the API) or the directory `Deny`.
-- **Request-body limit vs uploads.** `SecRequestBodyLimit` can reject large media
-  before DokuWiki sees them. Phase-1/2 item: confirm max upload size, exempt
-  `lib/exe/fetch.php` / the media endpoints or raise the limit.
+- **Request-body limit vs uploads.** Two limits, and the smaller one (`SecRequestBodyNoFilesLimit`, default 1 MiB) was the actual blocker: the agent's JSON-RPC `core.saveMedia` base64-encodes the file *inside the JSON body*, so the whole payload counts as "no files data" and a 1.0 MiB file was rejected at the 1 MiB default — even in DetectionOnly. Fixed in Phase 1 by raising it to track `SecRequestBodyLimit` (13 MiB); revisit if larger uploads are ever needed. (The overall `SecRequestBodyLimit` was never the constraint in practice.)
 - **Audit log captures bodies.** Kept off by default (Decision #5); if enabled,
   it includes page content and possibly auth headers — keep it on the private
   volume, not Grafana, and rotate it.
@@ -471,8 +485,15 @@ runs `IncludeOptional /etc/modsecurity/*.conf`, so a root-level file would be
 double-loaded (glob + our explicit include) → duplicate rule id → Apache
 fails to start. The `crs/` subdir is outside the non-recursive glob. Phase-2
 content-rule FP
-exclusions get added to the same file. (README 'Features' + 'What's here' rows
-and the checklist→notes conversion are the last Phase-2 item, per the
+exclusions get added to the same file. **Body-limit fix (Phase 1):** the agent's
+`core.saveMedia` uploads base64-encode the file *inside the JSON body* (not
+multipart), so the whole payload counts as mod_security's "no files data" and
+tripped `SecRequestBodyNoFilesLimit`'s 1 MiB default at 1.0 MiB files — *even in
+DetectionOnly*, since size limits are protocol-level rejections, not rule
+matches. `modsecurity.conf` now sets it to track `SecRequestBodyLimit` (13 MiB);
+all agent traffic is JSON-RPC with zero multipart file parts, so the
+files/no-files split carries no information here. (README 'Features' + 'What's
+here' rows and the checklist→notes conversion are the last Phase-2 item, per the
 convention in `AGENTS.md`.)
 
 ### Phase 2 — Enforce (gated on Phase-1 data)
