@@ -73,6 +73,14 @@ def _gunzip_if_needed(raw, headers):
     return raw
 
 
+def _strip_html(s):
+    """Crude tag/whitespace stripper for web-server error pages (Apache/nginx/PHP
+    4xx/5xx HTML). NOT a general HTML parser — just collapses <...> and runs of
+    whitespace so a 413/500 body is legible inside the one-line RPC error
+    message. Stdlib only."""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s)).strip()
+
+
 def rpc_call(method, params=None):
     """Call a JSON-RPC method (positional params). Returns (result, err), where
     err is {code, message} on failure and None on success — JSON-RPC application
@@ -114,10 +122,15 @@ def rpc_call(method, params=None):
         with urllib.request.urlopen(req, timeout=120) as r:
             obj = json.loads(_gunzip_if_needed(r.read(), r.headers).decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
-        body = _gunzip_if_needed(e.read(), e.headers).decode("utf-8", "replace")[:300]
-        code, msg = e.code, body
+        # Read the FULL body before parsing. A [:300] cap here would (a) break
+        # json.loads on a large JSON-RPC error payload and (b) cut off the
+        # diagnostic HTML Apache/nginx/mod_security/PHP return on e.g. 413/500,
+        # leaving media-upload failures reading identically no matter which
+        # layer rejected them. We only truncate for display (below).
+        text = _gunzip_if_needed(e.read(), e.headers).decode("utf-8", "replace")
+        code, msg = e.code, text
         try:
-            ej = json.loads(body)
+            ej = json.loads(text)
             ej = ej.get("error") if isinstance(ej, dict) else None
             if isinstance(ej, dict):
                 # DokuWiki returns JSON-RPC application errors as HTTP 400, with
@@ -125,9 +138,18 @@ def rpc_call(method, params=None):
                 # callers can branch on the RPC code (e.g. getPageInfo's 121) and
                 # rpc() prints [121] ... rather than a [400] JSON blob.
                 code = ej.get("code", e.code)
-                msg = ej.get("message", body)
+                msg = ej.get("message", text)
         except (ValueError, TypeError):
-            pass
+            # Not JSON — a web-server/proxy/PHP error page (HTML), e.g. Apache's
+            # 413 when a request-body limit is exceeded. Tag it so it isn't
+            # mistaken for a JSON-RPC error, keep the HTTP status front and
+            # centre, and strip tags so the agent can read which layer said what
+            # (the stripped text often names the server: 'nginx', 'Apache/2.4',
+            # a custom ErrorDocument, ...).
+            snippet = _strip_html(text).strip()[:500]
+            msg = f"HTTP {e.code} (not a JSON-RPC response)"
+            if snippet:
+                msg = f"{msg}: {snippet}"
         return None, {"code": code, "message": msg}
     except urllib.error.URLError as e:
         return None, {"code": "network", "message": str(e)}

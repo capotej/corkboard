@@ -349,9 +349,9 @@ def test_rpc_call_unwraps_jsonrpc_error_in_http_body():
     import urllib.error
     import urllib.request
 
-    def fake_urlopen(body):
+    def fake_urlopen(body, status=400, reason="Bad Request"):
         def _u(req, timeout=None):
-            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, io.BytesIO(body))
+            raise urllib.error.HTTPError(req.full_url, status, reason, {}, io.BytesIO(body))
 
         return _u
 
@@ -379,12 +379,35 @@ def test_rpc_call_unwraps_jsonrpc_error_in_http_body():
         )
         check("rpc_call returns no result on error", res, None)
 
-        # non-JSON 400 body -> fall back to the HTTP code + raw body
+        # non-JSON HTTP body (a web-server error page, e.g. Apache/nginx 413
+        # when a request-body limit trips) -> HTTP code preserved, message
+        # tagged as NOT a JSON-RPC response, tags stripped so the readable body
+        # names the layer. (The [:300]-cap-on-raw-HTML this replaced made every
+        # 413 read identically no matter which layer rejected it.)
         urllib.request.urlopen = fake_urlopen(b"<html>Bad Request</html>")
         res, err = cb.rpc_call("core.savePage", ["x"])
         check("non-JSON body -> HTTP code preserved", err.get("code"), 400)
+        msg = err.get("message")
         check(
-            "non-JSON body -> raw body as message", err.get("message"), "<html>Bad Request</html>"
+            "non-JSON body -> flagged not-a-JSON-RPC-response",
+            "not a JSON-RPC response" in msg,
+            True,
+        )
+        check("non-JSON body -> HTTP status in message", "400" in msg, True)
+        check("non-JSON body -> tags stripped (readable body present)", "Bad Request" in msg, True)
+        check("non-JSON body -> no raw <html> tag in message", "<html>" not in msg, True)
+
+        # 413 from a server that names itself (nginx) -> the readable body must
+        # surface the layer, so the agent can tell who rejected the upload.
+        nginx = b"<html><head><title>413</title></head><body><center>nginx</center></body></html>"
+        urllib.request.urlopen = fake_urlopen(nginx, 413, "Request Entity Too Large")
+        res, err = cb.rpc_call("core.saveMedia", ["reports:x.png", "b64", True])
+        check("413 body -> HTTP code preserved", err.get("code"), 413)
+        check("413 body -> names the rejecting layer (nginx)", "nginx" in err.get("message"), True)
+        check(
+            "413 body -> tagged not-a-JSON-RPC-response",
+            "not a JSON-RPC response" in err.get("message"),
+            True,
         )
     finally:
         urllib.request.urlopen = orig

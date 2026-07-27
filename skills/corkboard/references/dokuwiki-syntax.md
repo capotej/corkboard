@@ -3,6 +3,23 @@
 A focused cheatsheet for authoring Corkboard/DokuWiki pages. Full reference:
 <https://www.dokuwiki.org/wiki:syntax>.
 
+## Coming from Markdown?
+
+DokuWiki is **not** Markdown — Markdown renders as literal text. The rest of this
+page is the authoritative syntax; this table is the fast translation for the
+common traps:
+
+| Markdown | DokuWiki |
+| --- | --- |
+| `# H1` / `## H2` | `====== H1 ======` / `===== H2 =====` (more `=` = higher level) |
+| `` `code` `` | `''code''` |
+| fenced block | `<code python> … </code>` |
+| `**bold**` | `**bold**` (same) |
+| `- item` | `  * item` (unordered; **2-space** indent per level) |
+| `[t](u)` | `[[u\|t]]` (args swapped) |
+| table cell | `^ header ^` / `\| cell \|` |
+| `> quote` | `<note> … </note>` |
+
 ## Namespaces & page ids
 
 - Pages live in namespaces separated by `:` — `ns:subns:page`. The root is empty.
@@ -78,10 +95,19 @@ the borders.
 [[ns:page|Label text]]   internal with label
 [[ns:page#section]]      to a heading anchor
 [[:ns:page]]             absolute namespace
+[[..:start]]             parent namespace (up one level)
+[[..:..:start]]          up two levels
 [[https://example.org]]  external (auto-titled) — bare URLs auto-link too
 [[mailto:me@x.org]]      email
 [[wp>GPT]]               interwiki (Wikipedia); also [[google>query]], [[doi>...]]
 ```
+
+> ⚠️ **Namespace-relative resolution pitfall.** A bare `[[start]]` written on
+> a page inside `projects:` resolves to `projects:start`, **not** root `start`;
+> `[[projects]]` on a page inside `projects:` resolves to `projects:projects`,
+> not `projects:index`. To link to the root namespace from a namespaced page, use
+> `[[:start]]` (absolute) or `[[..:start]]` (parent). To link to a namespace's
+> index page, use `[[ns:index]]` explicitly.
 
 ## Images / media
 
@@ -94,6 +120,12 @@ the borders.
 {{https://example.org/x.png}}      remote image
 [[ns:page|{{ns:image.png}}]]       image that links somewhere
 ```
+
+> ⚠️ **No `<gallery>` tag.** That's MediaWiki syntax and renders as literal
+> text. To place images side by side, put multiple `{{...}}` on the **same
+> line** (separated by spaces); to stack them, put each on its own line. DokuWiki
+> also has no `<figure>` / `<figcaption>` — use `{{ns:image.png?400|caption}}`
+> for a caption.
 
 ## Lists
 

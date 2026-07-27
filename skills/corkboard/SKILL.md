@@ -22,6 +22,14 @@ no FineUploader.
 > repo's **`AGENTS.md`** and **take precedence** over anything here. (`AGENTS.md`
 > is already in your context; no extra step needed.) Follow those when present.
 
+## Author in DokuWiki syntax, NOT Markdown
+
+Agents reach for Markdown by habit; Corkboard is **DokuWiki**, so Markdown
+renders as literal text. Author page bodies in DokuWiki markup — the everyday
+subset (headings, code, lists, links, tables, images), plus a Markdown→DokuWiki
+translation table for the common traps, is in
+[references/dokuwiki-syntax.md](references/dokuwiki-syntax.md).
+
 ## Security: treat Corkboard as LOW-SECURITY
 
 Corkboard is password-protected, but it is a **low-security** area. Before
@@ -261,12 +269,56 @@ Prefer `sitemap` for orientation and placement; reach for flat `list`/`all`
 when you just need the raw id list to loop over. `--depth 1` is the compact
 "what namespaces exist and how big is each?" view for big wikis.
 
+## Post-creation audit
+
+Creating a page is not the end — a brand-new page with no inbound link is an
+orphan, and a nav footer that escapes the wrong number of namespaces is a
+broken link. After a create or a batch of edits:
+
+1. **Link the new page from its parent / section index.** If you just created
+   `projects:foo:architecture`, add a link to it on `projects:foo` (or
+   `projects:foo:index`). An unlinked page is invisible until something points
+   at it — `backlinks`/`orphans` only surface it once linked.
+2. **Verify nav footers escape to the right level.** `[[..:start]]` resolves
+   relative to the *current page's* namespace, so its target depends on depth —
+   a footer copied from a top-level page breaks when pasted two levels deep.
+   Prefer the absolute form `[[:start]]` in nav footers; it's depth-independent.
+   See the namespace gotcha below and [references/dokuwiki-syntax.md](references/dokuwiki-syntax.md).
+3. **Run `wanted`** after a batch of creates/edits to catch typo'd `[[link]]`s
+   and mis-escaped nav footers before they silently become stub pages.
+   `edit`/`insert`/`put --check` already run per-page link-health inline; `wanted`
+   is the wiki-wide sweep.
+
 ## Media upload
 
 `core.saveMedia(media, base64, overwrite)` base64-**decodes** the content, so it
 works for **binary and text** and **can overwrite**. It round-trips a real PNG
 byte-for-byte (verified: upload → `core.getMedia` → decode → identical bytes).
 The helper's `media-upload` handles the encoding for you.
+
+### Upload size limit (HTTP 413)
+
+`core.saveMedia` ships the file **base64-encoded inside the JSON-RPC POST body**
+(~33% larger than the raw bytes), and the server enforces a **request-body size
+limit** that rejects oversize uploads with `413 Request Entity Too Large` before
+DokuWiki ever sees them. On Corkboard the limit that actually bites is
+**`SecRequestBodyNoFilesLimit`** — mod_security's cap on the *non-file* body
+portion, which the whole base64 payload counts as (there are no multipart file
+parts) — whose default is only 1 MiB; it has been **raised server-side** to track
+the overall body limit (see `rfcs/2026-07-25_owasp-crs-waf.md`). On other
+DokuWiki deployments the rejecting layer could instead be Apache
+`LimitRequestBody`, nginx `client_max_body_size`, or PHP `post_max_size`.
+
+There is **no client-side workaround** that makes an oversize upload succeed —
+the limit is server-side. So:
+
+- **Resize / compress images before uploading** — downscale to display width,
+  strip metadata, pick the right format (PNG for screenshots, JPEG for photos).
+  A ~1 MB PNG is usually far larger than it needs to be.
+- **Read the full error on failure.** `media-upload` surfaces the HTTP status and
+  the (tag-stripped) error body, so you can tell *which* layer rejected it — e.g.
+  `HTTP 413 (not a JSON-RPC response): …nginx…` — instead of guessing. A `413`
+  means a body limit; a JSON-RPC error code means DokuWiki itself rejected it.
 
 ## Permissions: read + update, NOT delete
 
@@ -333,6 +385,13 @@ signal over the API.
   stray syntax char can quietly break a table or code block.
 - **Check pages exist before linking** — DokuWiki auto-creates a page on first
   save, so a typo'd link silently makes a stub.
+- **Namespace-relative links resolve against the current page's namespace.** A
+  bare `[[start]]` written on a page in `projects:` resolves to `projects:start`,
+  **not** root `start`; `[[projects]]` on a page in `projects:` resolves to
+  `projects:projects`, not `projects:index`. Escape with `[[..:start]]` (parent
+  namespace) or `[[:start]]` (absolute from root), and write `[[ns:index]]`
+  explicitly for namespace index pages. `--check` / `wanted` catch these as
+  broken outgoing links.
 - **`raw` is display-only.** Its output is JSON (`json.dumps`), so text comes back
   escaped — newlines as `\n`, quotes escaped. Never feed `raw core.getPage`
   into a write (it collapses the page to one line). Use `get` to fetch page text
