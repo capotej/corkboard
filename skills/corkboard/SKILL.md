@@ -289,6 +289,32 @@ broken link. After a create or a batch of edits:
    `edit`/`insert`/`put --check` already run per-page link-health inline; `wanted`
    is the wiki-wide sweep.
 
+## URLs
+
+`CORKBOARD_URL` is the wiki root. This instance uses **clean URLs**
+(`userewrite=1` + `useslash=1`, routed by mod_rewrite — see
+`rfcs/2026-07-25_clean-urls-mod-rewrite.md`): a page/media id maps to a
+path-style URL with **`/` as the namespace separator** (the id itself still uses
+`:`). The legacy `doku.php?id=` form always resolves too — it's a fallback, not
+the canonical shape the wiki emits.
+
+| id | canonical (clean) URL | always-works fallback |
+| --- | --- | --- |
+| page `ns:sub:page` | `$CORKBOARD_URL/ns/sub/page` | `$CORKBOARD_URL/doku.php?id=ns:sub:page` |
+| page `ns:sub:page` §section | `$CORKBOARD_URL/ns/sub/page#section` | `$CORKBOARD_URL/doku.php?id=ns:sub:page#section` |
+| media `ns:img.png` | `$CORKBOARD_URL/_media/ns/img.png` | `$CORKBOARD_URL/lib/exe/fetch.php?media=ns:img.png` |
+
+- **Separator swaps: `:` in the id → `/` in the URL.** `projects:foo:bar` →
+  `/projects/foo/bar`. (DokuWiki also accepts `:` in the path, but emit the `/`
+  form — it's what the wiki links with.)
+- **Start pages are namespace roots:** `$CORKBOARD_URL/projects` resolves to
+  `projects:start`, and `$CORKBOARD_URL/` is the root `start`.
+- **Media URLs are ACL-checked and served via mod_xsendfile** — `/_media/…`
+  honors read permissions; it's not a public raw-file path.
+- **On-wiki, use wikitext, not a URL:** embed with `{{ns:img.png}}`, link with
+  `[[ns:page]]`. Construct these URLs only to share a link with a human or to
+  link from outside the wiki.
+
 ## Media upload
 
 `core.saveMedia(media, base64, overwrite)` base64-**decodes** the content, so it
