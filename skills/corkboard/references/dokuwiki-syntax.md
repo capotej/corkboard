@@ -139,6 +139,14 @@ Two leading spaces per nesting level. `*` unordered, `-` ordered.
   - second
 ```
 
+> ⚠️ **Keep each list item on one line — never indent a continuation line.**
+> A continuation line indented to align with the text (the natural Markdown habit)
+> trips DokuWiki's preformatted/code parser and is silently rendered as a gray code
+> box with its markup shown raw (`//italic//`, `''monospace''` literal) — the item's
+> first line renders fine, so it's easy to miss in the wikitext. DokuWiki soft-wraps a
+> long single line for display, so you don't need to break it yourself; if you want a
+> break inside an item, use a forced linebreak `\\`, not indentation.
+
 ## Misc
 
 - Horizontal rule: `----` (4+ dashes) on its own line.
