@@ -47,6 +47,68 @@ posting any page or uploading any file:
 
 Conventions that keep an agent-driven wiki navigable, auditable, and clean.
 
+**Ontology — shallow tree, dense graph.** The **hierarchy** (namespaces) is a
+filing shelf: keep it **shallow** (aim for ≤2–3 levels). The wiki's *real*
+structure lives in its **links** — a dense graph that puts any page within
+**≤2–3 hops** of any other, through hub pages (`start` pages, project pages).
+The shelf is how you *store* a page; the link graph is how an agent *finds* it
+and its surrounding context. Four rules make that real:
+
+- **1. Author absolute IDs by default — `[[:ns:page]]`.** A link's target must
+  not depend on where the *linking* page lives: agents paste links between pages
+  at different depths, and pages move. On this build the forms without a leading
+  colon silently retarget: `[[start]]` resolves to the **current** namespace's
+  start (a different page at every depth); `[[..:start]]` resolves to the
+  **parent** (depth-dependent); and an agent who *thinks* `[[guides:playwright]]`
+  is a sibling link is wrong — multi-segment links resolve from **root**, so it
+  targets root `guides:playwright`, not a sibling under the current namespace.
+  (A fully root-qualified `[[ns:sub:page]]` does resolve from root everywhere —
+  but it shares syntax with the dangerous bare forms.) Making **leading-colon
+  absolute the default** removes the reasoning entirely: `[[:ns:page]]` means
+  one thing at every depth, on every page. Reach for `[[..:]]` or a bare token
+  only in a rare, deliberately depth-relative spot. `edit` / `insert` /
+  `put --check` and the wiki-wide `wanted` flag the misses; authoring absolute
+  removes the whole class.
+- **2. Cross-link aggressively, both directions.** A page that links out but is
+  never linked *to* is an orphan; a hub nothing points back into is a dead end.
+  Make related pages reference each other both ways — a journal entry links to
+  the project / design / doc it touched, and that project links back to its
+  journal entries. Hub pages are the short path between distant nodes, so keep
+  every page within 2–3 hops of one. This graph *is* the agent's navigation:
+  when an agent fetches a page, the outgoing links are how it discovers the
+  surrounding context.
+- **3. Make each page self-describing.** A page is the **retrieval unit** — the
+  chunk an agent fetches, reads, and links to as one thing. Make it parse on its
+  own: **one H1** (`====== Title ======`) naming the topic, ideally the same
+  token you'd link to it by (no second H1, no title-less page); then a **one- or
+  two-line summary** of what it is and its headline state *before* any detail (a
+  run page leads with its result, not its config); optionally a **status line**
+  (`//Status: done//`, `**Best val 2.84**`) near the top so the page's state is
+  visible at a glance.
+- **4. Prefer a dense graph to a deep tree.** When you'd add a nesting level,
+  ask if a link would do instead. Two flat pages that cross-link usually beat a
+  parent plus a buried child: flatter pages are easier to find, easier to link
+  absolutely, and survive moves (renaming one flat page orphans nothing; moving
+  a subtree orphans its internal relative links). Add a sub-namespace only for a
+  genuine *cluster* of pages that share a `start` hub — not to express a single
+  relationship.
+
+**Reference ontology (example, not required).** No set of namespaces is
+mandated — AGENTS.md picks those per project, and they take precedence. One
+shape that makes the dense-graph model concrete is a **journal / projects /
+docs** triad off a root `start`:
+
+- `projects:` — one page per durable effort (scope, status, links into its
+  design + journal history); the project page is that effort's hub.
+- `journal:` — dated entries (`journal:2026-07-28_aws-ssm-secret-source`)
+  recording what happened; each links *out* to the project / design / docs it
+  touched, and the project links *back* into its entries.
+- `design:` / `docs:` — the slower-moving reference a project rests on; linked
+  from projects and entries, linking back.
+
+Whatever ontology you pick, the rule is the same: shallow namespaces, dense
+bidirectional links, every page ≤2–3 hops from a hub.
+
 **Editing**
 
 - **Set an edit summary every time** (`--sum`) — it populates page history / Recent
@@ -75,11 +137,11 @@ Conventions that keep an agent-driven wiki navigable, auditable, and clean.
   landing: two landings in one namespace is the top cause of confused addressing
   and orphans. (Only set `$conf['start']` if you deliberately choose a different
   token — and then use *that* token everywhere.)
-- **Keep pages linked both ways.** Cross-link related pages and add a **nav
-  footer** ("Back to `[[..:start]]` / `[[:start]]`") so no page is a dead-end
-  (outgoing); conversely, **every page should be linked *from* somewhere** (its
-  namespace `start` or another page) — no orphans. Run `wanted` / `orphans` /
-  `media-orphans` (see Gardening) to check.
+- **End pages with a nav footer of absolute links** back to their hubs
+  (`Back to [[:projects:foo]] · [[:start]]`) — absolute per Ontology rule 1, so
+  it's depth-independent wherever you paste it. The *both-ways*, no-orphans,
+  ≤2–3-hops discipline is Ontology rule 2; `wanted` / `orphans` /
+  `media-orphans` (see Gardening) check it.
 - **nspages links count as backlinks, and stay fresh.** Because nspages emits
   links through the standard renderer, a child listed on its `start` is not an
   orphan. And the bundled corkboard action plugin re-indexes each enclosing
@@ -433,10 +495,11 @@ signal over the API.
 - **Namespace-relative links resolve against the current page's namespace.** A
   bare `[[start]]` written on a page in `projects:` resolves to `projects:start`,
   **not** root `start`; `[[projects]]` on a page in `projects:` resolves to
-  `projects:projects`, not `projects:start`. Escape with `[[..:start]]` (parent
-  namespace) or `[[:start]]` (absolute from root), and write `[[ns:start]]`
-  explicitly for namespace start pages. `--check` / `wanted` catch these as
-  broken outgoing links.
+  `projects:projects`, not `projects:start`; and a multi-segment `[[guides:foo]]`
+  resolves from **root**, not the current namespace — so what looks like a
+  sibling link isn't. This is why the rule is to **author absolute `[[:…]]`
+  links by default** (see Ontology): `[[:start]]`, `[[:ns:start]]`. `--check` /
+  `wanted` catch these as broken outgoing links.
 - **`raw` is display-only.** Its output is JSON (`json.dumps`), so text comes back
   escaped — newlines as `\n`, quotes escaped. Never feed `raw core.getPage`
   into a write (it collapses the page to one line). Use `get` to fetch page text
