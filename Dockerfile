@@ -81,6 +81,31 @@ RUN set -eux; \
 # lib/plugins/corkboard/ (the entrypoint refreshes bundled plugins each boot).
 COPY corkboard-plugin/ /var/www/html/lib/plugins/corkboard/
 
+# nspages plugin: auto-generated, never-stale namespace indexes. Every
+# namespace `start` page renders its child list with a single
+# `<nspages -exclude -h1 -subns>` tag (prescribed in skills/corkboard/SKILL.md),
+# so the landing-page hub can't drift as pages are added/removed. And because
+# nspages emits links via the standard renderer (`internallink`), they register
+# in `relation.references` — so corkboard's `orphans`/`backlinks` see them and
+# don't flag nspages-listed pages as false orphans. Pinned to a specific upstream
+# commit + SHA-256 verified, the same pattern as DokuWiki core / CRS above.
+# nspages carries no version tags (development is continuous on `main`), so the
+# "version" is a commit SHA. Extracts to a single top-level `nspages-<sha>/`
+# dir, hence --strip-components=1. The entrypoint refreshes bundled plugins
+# each boot, so this lands on the volume like the corkboard plugin above.
+ARG NSPAGES_REF=5887aac891575b5a7aead58c604ec5af0df76b58
+ARG NSPAGES_URL=https://github.com/gturri/nspages/archive/${NSPAGES_REF}.tar.gz
+# SHA-256 of the nspages archive, pinned to NSPAGES_REF -- verified on every
+# build. When you bump NSPAGES_REF, recompute this (`curl -sL <NSPAGES_URL> |
+# sha256sum`) or override at build time with --build-arg NSPAGES_SHA256=<sha>.
+ARG NSPAGES_SHA256=3e1afbf5fe1d9a99232623fbafff56678406bda483ca643b7a5680ea469eea7f
+RUN set -eux; \
+    wget -qO /tmp/nspages.tgz "${NSPAGES_URL}"; \
+    echo "${NSPAGES_SHA256}  /tmp/nspages.tgz" | sha256sum -c -; \
+    mkdir -p /var/www/html/lib/plugins/nspages; \
+    tar -xzf /tmp/nspages.tgz -C /var/www/html/lib/plugins/nspages --strip-components=1; \
+    rm /tmp/nspages.tgz
+
 # Locked-down config templates. The image's conf/ stays pristine at build
 # time; entrypoint.sh always writes these into the volume's conf/ (the wiki
 # ships closed by default). CORKBOARD_ADMIN_PASS and CORKBOARD_AGENT_PASS (Fly

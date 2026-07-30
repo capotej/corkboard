@@ -11,7 +11,8 @@ What Corkboard ships with out of the box:
 - **Login-only (closed by default)** — anonymous access is denied (`@ALL 0`); reading or writing requires a login. No self-registration, no password resets.
 - **JSON-RPC API** — DokuWiki's Remote API is enabled and restricted to the `@api`/`@admin` groups, for programmatic read/write over HTTP Basic auth.
 - **All safe upload formats** — ~150 file types allowed (text, source code, data/config, archives, fonts, e-books, …); `html`/`htm` are blocked (XSS vector).
-- **Corkboard RPC plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that gives the agent single-call answers the core API can't: wanted/orphan pages, unreferenced media, per-page **link health**, and **compare-and-swap** writes (so a surgical edit never silently clobbers a concurrent one).
+- **Corkboard RPC + action plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that gives the agent single-call answers the core API can't: wanted/orphan pages, unreferenced media, per-page **link health**, and **compare-and-swap** writes (so a surgical edit never silently clobbers a concurrent one). Its action component re-indexes a namespace's `start` page whenever a page is created or deleted under it, keeping `orphans`/`backlinks` immediately consistent with the nspages auto-index below.
+- **Auto-generated namespace indexes (nspages)** — every namespace's `start` page lists its children with a single `<nspages>` tag, so landing-page hubs can't drift as pages come and go. Because nspages emits links through the standard renderer, they register as backlinks — so nspages-listed pages are never false orphans. Bundled, pinned to an upstream commit, and SHA-256-verified in the image.
 - **Agent skill** — a stdlib-only Python skill (`skills/corkboard/`) the agent uses to read, write, organize, and garden the wiki — including **surgical** in-place edits and anchor inserts, in-page search, and batch edits across pages. See `skills/corkboard/SKILL.md`.
 - **No phone-home** — `updatecheck=0`; the `popularity` plugin is disabled.
 - **Gzip over the wire** — Apache (`mod_deflate`) compresses text responses for browsers and the agent; the skill sends `Accept-Encoding: gzip` and decodes it. DokuWiki does no encoding of its own (`gzip_output=0`).
@@ -44,7 +45,7 @@ directories onto that volume on every boot — see
 | `conf-seed/`                | Locked-down config templates: closed ACL, `useacl`, JSON-RPC, disabled plugins, broad upload allowlist |
 | `bootstrap-user.php`        | Creates the `admin` and `agent` accounts from Fly secrets (bcrypt, idempotent) |
 | `skills/corkboard/`         | The agent skill: a Python JSON-RPC client (`script/corkboard.py`) + `SKILL.md` |
-| `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): wanted/orphans/media-orphans, per-page link health, and compare-and-swap writes |
+| `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): wanted/orphans/media-orphans, per-page link health, compare-and-swap writes, and an action hook that re-indexes namespace `start` pages on page create/delete (keeps `orphans`/`backlinks` fresh with nspages) |
 | `apache-deny-sensitive.conf`| Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/` `vendor/`, and sets `Options -Indexes -ExecCGI` |
 | `apache-hardening.conf`    | Server fingerprint/`TRACE` off, security response headers (HSTS gated on `X-Forwarded-Proto`), Slowloris caps |
 | `remoteip.conf`            | Recover the real client IP from Fly's proxy (`mod_remoteip` on `Fly-Client-IP`) |
@@ -340,17 +341,37 @@ ARG DOKUWIKI_VERSION=<new-version>          # bump this
 ARG DOKUWIKI_SHA256=<recomputed sha256>    # AND this (the URL is derived from VERSION)
 ```
 
-Recompute the hash from the new tarball, then redeploy:
+Recompute the hash from the new tarball, then build & push the new image:
 
 ```bash
 curl -sL "https://download.dokuwiki.org/src/dokuwiki/dokuwiki-<new-version>.tgz" | sha256sum
 fly deploy
 ```
 
+**Under `auto_stop_machines = 'suspend'`, `fly deploy` (+ `fly machine restart`)
+is not a reliable way to apply the new image** — the machine can resume its
+stale rootfs instead of cold-booting, so the upgrade silently never takes effect
+(the entrypoint doesn't re-run; bundled plugins/config aren't refreshed). To
+**guarantee** the new image boots, destroy and recreate the machine. The volume
+(`dokuwiki_data`) is separate from the machine and is **not** destroyed, so your
+pages, users, ACLs, and config all carry over:
+
+```bash
+fly machine list -a <app>                       # find the machine id
+fly machine destroy <machine-id> -a <app>       # dokuwiki_data persists — verify with `fly volumes list`
+fly deploy -a <app>                             # creates a fresh machine that cold-boots the new image
+```
+
+This applies to **any** image change — bundled or third-party plugin updates,
+`entrypoint.sh` edits, DokuWiki core bumps, base-image/PHP changes — not just
+version upgrades. Image/plugin updates are infrequent, and the volume is
+preserved, so recreating the machine is cheap insurance.
+
 ### What happens on the upgrade boot
 
-A new image invalidates Fly's suspend snapshot, so the next boot is a **cold
-start** and `entrypoint.sh` re-runs against the **existing** volume:
+Once the machine actually cold-boots the new image (use the destroy-and-recreate
+step above — a plain `fly deploy` + `fly machine restart` does **not** reliably
+cold-start under suspend), `entrypoint.sh` re-runs against the **existing** volume:
 
 | What | On a seeded volume at upgrade |
 | --- | --- |
@@ -372,8 +393,10 @@ everything you created or configured is carried over.
   *as-is* — they are **not** upgraded and may not be compatible with the new
   release. After deploy, re-check/update them in **Admin → Extension Manager**.
   (Bundled ones always track the release.)
-- The **first request after deploy is a ~7 s cold start** (the new image
-  invalidates the suspend snapshot); it returns to ~0.7 s resume once idle.
+- The **first request after the destroy-and-recreate is a ~7 s cold start**;
+  it returns to ~0.7 s resume once idle. (A plain `fly deploy` under suspend may
+  instead *resume* the stale rootfs — which is exactly why the recreate step above
+  is required.)
 - Don't keep manual edits in the conf **release-default** files on the volume —
   the refresh overwrites them. Edit the user-managed files (or `conf-seed/`)
   instead.
@@ -420,8 +443,11 @@ state to disk) and resumes it on the next request.
   so Apache/PHP and its warm OPcache shared memory are preserved; `entrypoint.sh`
   does *not* re-run. Suspend fits well: a 512 MB VM, no DB connection pool to
   break, flat files on the volume.
-- **Cold start (~7 s) is the fallback** — after a deploy (a new image invalidates
-  the snapshot), a host migration, or a lost snapshot. Kept fast by: no per-boot
+- **Cold start (~7 s) is the fallback** — after a host migration, a lost snapshot,
+  or (reliably) a machine recreate. A plain `fly deploy` does **not** reliably
+  cold-start a new image under suspend (the machine may resume its stale rootfs),
+  so image/plugin/DokuWiki updates require destroy + recreate — see
+  [Upgrading & re-seeding](#upgrading--re-seeding). Kept fast by: no per-boot
   recursive `chown` of the webroot (the Dockerfile chowns it at build time),
   skipping `bootstrap-user.php` when the accounts already exist, and OPcache
   sized with preload **off**. (Preload compiles-without-executing, which breaks

@@ -62,13 +62,31 @@ Conventions that keep an agent-driven wiki navigable, auditable, and clean.
 
 **Structure**
 
-- **One topic per page**, grouped by namespace; give each namespace an **index
-  page** that lists and links its children.
+- **One topic per page**, grouped by namespace. Every namespace has a **`start`
+  page** (`<ns>:start`) that is its hub: an intro line, then a single
+  `<nspages -exclude -h1 -subns>` tag (the bundled **nspages** plugin) that
+  auto-lists its children. Never hand-maintain a child list on a `start` page —
+  it goes stale; nspages can't.
+- **One landing-page convention, everywhere: `<ns>:start`.** The namespace-root
+  URL resolves to `<ns>:start` (`$CORKBOARD_URL/projects` → `projects:start`), so
+  `start` is the only page that can actually be a namespace's front door — use it
+  in **every** namespace, root included. Don't mix in `index`, and don't create a
+  page whose id equals the namespace name (`projects:projects`) as a competing
+  landing: two landings in one namespace is the top cause of confused addressing
+  and orphans. (Only set `$conf['start']` if you deliberately choose a different
+  token — and then use *that* token everywhere.)
 - **Keep pages linked both ways.** Cross-link related pages and add a **nav
-  footer** ("Back to [[index]] / [[start]]") so no page is a dead-end (outgoing);
-  conversely, **every page should be linked *from* somewhere** (an index or another
-  page) — no orphans. Run `wanted` / `orphans` / `media-orphans` (see Gardening) to
-  check.
+  footer** ("Back to `[[..:start]]` / `[[:start]]`") so no page is a dead-end
+  (outgoing); conversely, **every page should be linked *from* somewhere** (its
+  namespace `start` or another page) — no orphans. Run `wanted` / `orphans` /
+  `media-orphans` (see Gardening) to check.
+- **nspages links count as backlinks, and stay fresh.** Because nspages emits
+  links through the standard renderer, a child listed on its `start` is not an
+  orphan. And the bundled corkboard action plugin re-indexes each enclosing
+  `start` the moment a page is created or deleted, so `orphans`/`backlinks` are
+  correct immediately — you do **not** need to manually link a new page from its
+  `start` just to keep it off the orphan list. (Do still add *contextual* links
+  from related pages when the child belongs in a narrative.)
 - **Split long pages** into sub-pages — large pages render slowly and can hit
   parser limits.
 
@@ -178,7 +196,7 @@ reports per-page results (`ok`/`noop`/`conflict`/`failed`):
 ```json
 [
   {"page": "run:2024q1", "sum": "record result", "edits": [{"old": "status: tbd", "new": "status: pass"}]},
-  {"page": "results:index", "sum": "link run", "insert": {"after": "===== Q1 =====", "text": "  - [[run:2024q1]]"}},
+  {"page": "results:start", "sum": "link run", "insert": {"after": "===== Q1 =====", "text": "  - [[run:2024q1]]"}},
   {"page": "lessons", "sum": "lesson", "insert": {"under": "Lessons", "text": "- retry on 5xx"}}
 ]
 ```
@@ -239,7 +257,7 @@ fresh id). Media ids are `<ns>:<name>` (or just `<name>` for the root ns).
 Before deciding where a new page belongs (or just to see the wiki at a glance),
 run `sitemap` — it issues **one `core.listPages` call** and renders an ASCII
 **tree** of namespaces with per-namespace page counts, page titles (when set),
-`*` on each namespace's `index`/`start` landing page, and `[system]` on the
+`*` on each namespace's `start` landing page, and `[system]` on the
 built-in `wiki:` docs:
 
 ```bash
@@ -255,14 +273,14 @@ python3 script/corkboard.py sitemap --json          # structured nested tree
 ├── playground/ — 1 pages
 │   └── notes
 ├── reports/ — 4 pages
-│   ├── index *  "Reports"
+│   ├── start *  "Reports"
 │   ├── 2024/ — 2 pages
 │   │   ├── q1  "Q1 Summary"
 │   │   └── q2  "Q2 Summary"
 │   └── archive/ — 1 pages
 │       └── old  "Legacy Reports"
 └── wiki/ — 2 pages  [system]
-(* = namespace index/start page; [system] = DokuWiki built-in pages)
+(* = namespace start page; [system] = DokuWiki built-in pages)
 ```
 
 Prefer `sitemap` for orientation and placement; reach for flat `list`/`all`
@@ -275,10 +293,11 @@ Creating a page is not the end — a brand-new page with no inbound link is an
 orphan, and a nav footer that escapes the wrong number of namespaces is a
 broken link. After a create or a batch of edits:
 
-1. **Link the new page from its parent / section index.** If you just created
-   `projects:foo:architecture`, add a link to it on `projects:foo` (or
-   `projects:foo:index`). An unlinked page is invisible until something points
-   at it — `backlinks`/`orphans` only surface it once linked.
+1. **The `start` page auto-lists your new page** via its `<nspages>` tag, so the
+   page is reachable and non-orphan with no manual link — and corkboard
+   re-indexes the `start` on create, so `orphans` already reflects it. Add
+   *contextual* links only when the child belongs in a specific narrative (e.g.
+   link a new run page from a project's results section).
 2. **Verify nav footers escape to the right level.** `[[..:start]]` resolves
    relative to the *current page's* namespace, so its target depends on depth —
    a footer copied from a top-level page breaks when pasted two levels deep.
@@ -414,9 +433,9 @@ signal over the API.
 - **Namespace-relative links resolve against the current page's namespace.** A
   bare `[[start]]` written on a page in `projects:` resolves to `projects:start`,
   **not** root `start`; `[[projects]]` on a page in `projects:` resolves to
-  `projects:projects`, not `projects:index`. Escape with `[[..:start]]` (parent
-  namespace) or `[[:start]]` (absolute from root), and write `[[ns:index]]`
-  explicitly for namespace index pages. `--check` / `wanted` catch these as
+  `projects:projects`, not `projects:start`. Escape with `[[..:start]]` (parent
+  namespace) or `[[:start]]` (absolute from root), and write `[[ns:start]]`
+  explicitly for namespace start pages. `--check` / `wanted` catch these as
   broken outgoing links.
 - **`raw` is display-only.** Its output is JSON (`json.dumps`), so text comes back
   escaped — newlines as `\n`, quotes escaped. Never feed `raw core.getPage`
