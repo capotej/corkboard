@@ -470,6 +470,19 @@ python3 script/corkboard.py backlinks <page>     # pages linking TO a page
 > walking every page from the client. The helper falls back to the per-page
 > `core.*` walk automatically if the plugin isn't installed.
 
+> **`wanted` under-reports links to your *own* namespace — `linkhealth` catches
+> them.** DokuWiki's index applies an "own-namespace" shortcut: a link like
+> `[[ml:eval]]` written on a page *inside* `ml:eval:` is resolved to
+> `ml:eval:start` for the `wanted` / admin scan, so it never shows as broken —
+> even though `ml:eval` is a namespace, not a page, and the link is fragile (it
+> only "works" while the page happens to live in that namespace). The per-page
+> `linkhealth` check does **not** apply that shortcut and correctly flags such
+> bare-namespace links. So don't treat `wanted` as a complete broken-link report
+> on its own: the per-page `linkhealth` that `edit` / `insert` / `put --check`
+> run after every write (or `raw plugin.corkboard.linkhealth '["page"]'`) is the
+> stricter signal — and per Ontology rule 1, authoring absolute
+> `[[:ns:start]]` links removes the whole class.
+
 `wanted` / `orphans` / `media-orphans` scan every page or media file (seconds to
 a minute on a small wiki) and print to stdout, with progress on stderr. Run them
 periodically and after big edits. **`media-orphans` is especially useful** since
