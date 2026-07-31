@@ -88,6 +88,13 @@ empty cell below a header merges **up** (rowspan).
 each row with the same `^` or `|`; a leading/trailing space keeps content off
 the borders.
 
+> ⚠️ **Never indent table rows.** A leading space or two on a `^` or `|` row
+> triggers DokuWiki's preformatted/code-block parser (the same 2-space rule as
+> code blocks and list continuations), and the entire table renders as a gray
+> code box with raw markup shown literally. Tables must start at column 0 —
+> even a 2-space indent from an editor or surrounding list indentation breaks
+> them.
+
 ## Links
 
 ```
