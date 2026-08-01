@@ -106,6 +106,29 @@ RUN set -eux; \
     tar -xzf /tmp/nspages.tgz -C /var/www/html/lib/plugins/nspages --strip-components=1; \
     rm /tmp/nspages.tgz
 
+# move plugin: rename/move pages, media, and whole namespaces while rewriting
+# every backlink and relocating the attic (so revision history is preserved) --
+# the engine behind `plugin.corkboard.move` (corkboard-plugin/remote.php), which
+# delegates to this plugin's helper_plugin_move_plan API. Without it the skill's
+# `move` command returns reason:'no_plugin'. Pinned to a tagged release +
+# SHA-256 verified, the same pattern as nspages above (move ships real release
+# tags, so the ref is a tag, not a commit SHA). Extracts to a single top-level
+# dokuwiki-plugin-move-<tag>/ dir, hence --strip-components=1. The entrypoint
+# refreshes bundled plugins each boot, so this lands on the volume like the
+# corkboard/nspages plugins.
+ARG MOVE_REF=2026-06-16
+ARG MOVE_URL=https://github.com/michitux/dokuwiki-plugin-move/archive/refs/tags/${MOVE_REF}.tar.gz
+# SHA-256 of the move archive, pinned to MOVE_REF -- verified on every build.
+# When you bump MOVE_REF, recompute this (`curl -sL <MOVE_URL> | sha256sum`) or
+# override at build time with --build-arg MOVE_SHA256=<sha>.
+ARG MOVE_SHA256=647f8a9af399fd599b7157f89aa91196cfc6b4b5dc835831b672905dec147f5d
+RUN set -eux; \
+    wget -qO /tmp/move.tgz "${MOVE_URL}"; \
+    echo "${MOVE_SHA256}  /tmp/move.tgz" | sha256sum -c -; \
+    mkdir -p /var/www/html/lib/plugins/move; \
+    tar -xzf /tmp/move.tgz -C /var/www/html/lib/plugins/move --strip-components=1; \
+    rm /tmp/move.tgz
+
 # Locked-down config templates. The image's conf/ stays pristine at build
 # time; entrypoint.sh always writes these into the volume's conf/ (the wiki
 # ships closed by default). CORKBOARD_ADMIN_PASS and CORKBOARD_AGENT_PASS (Fly
