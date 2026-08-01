@@ -1,7 +1,7 @@
 # Page/media move via the move plugin + a `plugin.corkboard.move` RPC
 
 **Date:** 2026-08-01
-**Status:** Accepted
+**Status:** Implemented
 
 ## Goal
 
@@ -256,38 +256,53 @@ is "install it" — not a second-class move that quietly drops provenance.
   enclosing `start` on create/delete; confirm it also fires (or is extended to
   fire) on a move, so `orphans`/`backlinks` stay correct immediately after.
 
-## Implementation checklist
+## Implementation notes
 
-- [ ] Install move plugin (2024-05-07) on the Corkboard wiki; pin/record the
-      version; smoke-test a single-page move + backlink rewrite via the web GUI.
-- [ ] `conf-seed/acl.auth.php`: add `* @api 16` (highest-wins → the agent ∈
-      `user,api` resolves to 16; ordinary `@user` members stay at 8). Scope to a
-      namespace (`ns:* @api 16`) only if a future deployment wants it narrower.
-- [ ] `conf-seed/local.protected.php`: `$conf['mediarevisions'] = 1;` (locked on
-      so a media delete/move stays `media_attic`-recoverable; web Config Manager
-      can't flip it).
-- [ ] Verify **no attic auto-purge** runs (no retention cron / cleanup plugin
-      with a window a revision-spammer could push good content past).
-- [ ] `corkboard-plugin/remote.php`: add `public function move($src, $dst, $opts=[])`
-      — auth gate (AUTH_EDIT+CREATE for pages, AUTH_DELETE+UPLOAD for media, both
-      satisfied by the agent's own ACL after the grant — **no elevation code**),
-      `inProgress` guard, plan build (`addPageMove`/`addMediaMove`/
-      `addPageNamespaceMove`/`addMediaNamespaceMove`), `setOption` calls,
-      `commit()` + capped `nextStep()` loop, error → `getLastError()`+`abort()`.
-- [ ] `skills/corkboard/SKILL.md` **Permissions section**: the agent now **has**
-      delete (`core.deleteMedia` no longer 403s); document that deletion is
-      attic-recoverable (pages always; media iff `mediarevisions`, now locked
-      on) and the web Media Manager remains the cleanup path for *irreversible*
-      removal.
-- [ ] `skills/corkboard/script/corkboard.py`: `move` subcommand → calls the RPC,
-      post-runs `linkhealth` on `dst`, prints `{moved,steps,…}`.
-- [ ] `skills/corkboard/SKILL.md`: `move` row in the command table + a
-      `## Move: real renames, history preserved` section documenting the
-      concurrency-serial / auth / redirect-defaults-off contract.
-- [ ] `README.md`: list `move` in the skill features.
-- [ ] Tests: a unit test for the RPC's option→`setOption` mapping and the
-      `in_progress` / `not_found` / `too_large` refusal paths (the actual move is
-      exercised against a real wiki, like the gardening commands).
+Shipped across four commits (`7509c58a`, `26bd95c3`, `9ea91d9e`, + this one):
+
+- **`plugin.corkboard.move` RPC** (`corkboard-plugin/remote.php`): delegates to
+  the move plugin's `helper_plugin_move_plan` API — auth gate (AUTH_EDIT+CREATE
+  pages / AUTH_DELETE+UPLOAD media, satisfied by the agent's own ACL, **no
+  elevation code**), `isCommited()` in-progress guard, plan build + `setOption`
+  + `commit()` + capped (`500`) `nextStep()` loop, structured `reason` refusals
+  (`no_auth` / `in_progress` / `not_found` / `exists` / `no_plugin` / `too_large`).
+- **`move` subcommand** (`skills/corkboard/script/corkboard.py`): calls the RPC,
+  post-runs `linkhealth` on the dst, surfaces each `reason` with a hint. Pure
+  `build_move_opts` helper + 6 new tests (143 total).
+- **Auth guards** (`conf-seed/`): `* @api 16` in `acl.auth.php` (highest-wins);
+  `$conf['mediarevisions'] = 1` in `local.protected.php` (always-synced, so it
+  applies on any redeploy — **no fresh volume needed**). Caveat: `acl.auth.php`
+  is seed-once/never-clobber, so on an *existing* volume the `@api 16` grant
+  must be applied once via the web ACL Manager (or SSH); a fresh volume picks
+  it up from the seed.
+- **Move plugin bundled** (`Dockerfile`): pinned to release **`2026-06-16`**
+  (the latest; the RFC's `2024-05-07+` floor is satisfied) + SHA-256 verified,
+  extracted to `lib/plugins/move` the same way `nspages` is. The entrypoint
+  refreshes bundled plugins each boot, so it lands on the volume; not disabled
+  in `plugins.local.php`.
+- **Docs**: `move` in the SKILL.md command table + a Move section + corrected
+  Permissions section (agent now has delete; deletion is attic-recoverable);
+  `README.md` features/capabilities; `AGENTS.md` got a local `php -l` recipe
+  (precompiled static-php, SHA-256 TOFU-pinned) since PHP isn't in mise.
+
+**Verified end-to-end on the live instance** after deploy + the one-time `@api`
+web-ACL grant: a page move preserves content across revisions and rewrites
+backlinks wiki-wide (src gone); a media move (the AUTH_DELETE path) relocates
+the file with its revision/mtime intact and rewrites `{{...}}` references;
+`media-delete` now succeeds. Refusal reasons `not_found` / `exists` /
+`no_plugin` / `no_auth` each fire correctly with a hint.
+
+**Deviations from the RFC:**
+
+- The `move` subcommand takes **no `--sum`** — the move plugin writes its own
+  `↷ moved` changelog summary and the plan API accepts no custom one.
+- Couldn't enumerate moved revisions via the API (no `core.getRevisions` /
+  `firstRevision` on this build) to *directly* list the relocated attic; content
+  + the media's preserved mtime + the plugin's `movePageAttic` / `io_rename`
+  mechanism confirm it as far as the API allows.
+- The rewriter normalizes `[[:ns:page]]` → `[[ns:page]]` (drops the leading
+  colon); `linkhealth` confirms links still resolve. Move-plugin behavior, not
+  ours.
 
 ## Related
 
