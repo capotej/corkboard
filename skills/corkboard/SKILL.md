@@ -203,6 +203,8 @@ skill dir: `<skill>/script/corkboard.py`.
 | `media-orphans <ns>` | unreferenced media in a namespace | `core.getMediaUsage` |
 | `links <page>` | outgoing internal links from a page | `core.getPageLinks` |
 | `backlinks <page>` | pages linking TO a page | `core.getPageBackLinks` |
+| `lint [<page> \|--file F \|--stdin] [--fix] [--ns N]` | **lint** wikitext for rendering breakage; `--fix` auto-fixes (issue #4) | `getPage` (or none) |
+| `lint-all [--fix]` | lint every page (loops `all`); `--fix` auto-fixes each | `listPages` + `getPage` |
 | `raw <method> '<json-params>'` | escape hatch (any method) | — |
 
 ```bash
@@ -492,6 +494,65 @@ web Media Manager.
 DokuWiki also ships built-in **Wanted Pages** / **Orphaned Pages** admin reports
 (`doku.php?do=admin`), computed server-side; these commands expose the same
 signal over the API.
+
+## Lint: catch rendering breakage before you save
+
+`lint` catches the formatting mistakes agents make most — the ones where the
+wikitext **looks fine to a human scanning raw text but renders broken on the
+page.** It's pure string analysis (no DokuWiki instance), so it runs locally on
+a file or stdin too, and it fits the pre-save habit: **lint before you `put` /
+`edit` / `apply`.**
+
+```bash
+python3 script/corkboard.py lint some:page                   # lint a remote page
+python3 script/corkboard.py lint some:page --fix             # auto-fix + save (CAS)
+python3 script/corkboard.py lint --file draft.txt --ns proj  # lint a local file (no RPC)
+python3 script/corkboard.py lint --stdin < draft.txt         # lint from stdin
+python3 script/corkboard.py lint --file draft.txt --fix      # auto-fix in place
+python3 script/corkboard.py lint-all                         # lint every page
+python3 script/corkboard.py lint-all --fix                   # auto-fix every page
+```
+
+`--file` / `--stdin` read local text (no RPC) — use them to lint a draft before
+it ever touches the wiki, or in CI. `--ns` supplies the page's namespace so
+DW007 can flag namespace-relative links when you're linting a file (for a page
+id it's derived automatically). `--fix` applies the auto-fixable rules and
+writes back (a page via compare-and-swap, a file in place, stdin to stdout),
+then reports any remaining non-fixable findings. **Exit code is 0 if clean, 1
+if any finding** — so `lint` doubles as a CI gate.
+
+Each finding is `PAGE  Lnn  DWxxx  SEVERITY  message` (with a suggested
+replacement for auto-fixable rules):
+
+```
+some:page  L23   DW001 ERROR    Mixed ^/| table header separators ...  -> ^ A ^ B ^
+some:page  L45   DW004 WARNING  Markdown heading (#) renders ...        -> ====== H ======
+```
+
+### Rules (all sourced from real production breakage)
+
+| rule | severity | catches | `--fix`? |
+| --- | --- | --- | --- |
+| **DW001** | ERROR | table header row mixing `^` and `\|` → whole table renders as literal text | ✅ `\|`→`^` |
+| **DW002** | ERROR | `^`/`\|` table row with leading whitespace → renders as a code block | ✅ de-indent |
+| **DW003** | ERROR | list-item continuation indented 4+ → renders as a code block | report only |
+| **DW004** | WARNING | Markdown `# Heading` → renders as literal text | ✅ `=…=` heading |
+| **DW005** | WARNING | Markdown `[t](url)` → renders as literal text | ✅ `[[url\|t]]` |
+| **DW006** | WARNING | Markdown ` ``` ` / `~~~` fence → renders as literal text | ✅ `<code>`/`</code>` |
+| **DW007** | WARNING | namespace-relative `[[bare]]` → resolves under the page's ns | ✅ `[[:bare]]` |
+| **DW008** | WARNING | `[[link]]` inside a `==== heading ====` → renders raw | report only |
+| **DW009** | WARNING | MediaWiki `<gallery>` / `<figure>` / `<figcaption>` → literal text | report only |
+
+Every rule **skips lines inside `<code>`/`<file>` blocks and ` ``` /`~~~` fences**
+— content there is literal, not wikitext to fix. DW003 (continuation) and DW007
+(namespace-relative) are context-aware: DW003 looks at the previous line, DW007
+needs the page's namespace. The detection logic (`lint_wikitext`, `lint_fix`) is
+pure and unit-tested in `tests/test_corkboard_logic.py`.
+
+> **Lint is complementary to `wanted`/`orphans`.** Those catch *link-graph*
+problems server-side (broken targets, orphans); `lint` catches *syntax-level*
+rendering breakage in the raw wikitext, before it's saved. Run `lint` pre-save
+and `wanted`/`orphans` post-save.
 
 ## Gotchas
 

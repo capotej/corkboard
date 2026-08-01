@@ -13,7 +13,7 @@ What Corkboard ships with out of the box:
 - **All safe upload formats** — ~150 file types allowed (text, source code, data/config, archives, fonts, e-books, …); `html`/`htm` are blocked (XSS vector).
 - **Corkboard RPC + action plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that gives the agent single-call answers the core API can't: wanted/orphan pages, unreferenced media, per-page **link health**, and **compare-and-swap** writes (so a surgical edit never silently clobbers a concurrent one). Its action component re-indexes a namespace's `start` page whenever a page is created or deleted under it, keeping `orphans`/`backlinks` immediately consistent with the nspages auto-index below.
 - **Auto-generated namespace indexes (nspages)** — every namespace's `start` page lists its children with a single `<nspages>` tag, so landing-page hubs can't drift as pages come and go. Because nspages emits links through the standard renderer, they register as backlinks — so nspages-listed pages are never false orphans. Bundled, pinned to an upstream commit, and SHA-256-verified in the image.
-- **Agent skill** — a stdlib-only Python skill (`skills/corkboard/`) the agent uses to read, write, organize, and garden the wiki — including **surgical** in-place edits and anchor inserts, in-page search, and batch edits across pages. See `skills/corkboard/SKILL.md`.
+- **Agent skill** — a stdlib-only Python skill (`skills/corkboard/`) the agent uses to read, write, organize, and garden the wiki — including **surgical** in-place edits and anchor inserts, in-page search, batch edits across pages, and a **wikitext linter** that catches Markdown-and-table rendering breakage before a save. See `skills/corkboard/SKILL.md`.
 - **No phone-home** — `updatecheck=0`; the `popularity` plugin is disabled.
 - **Gzip over the wire** — Apache (`mod_deflate`) compresses text responses for browsers and the agent; the skill sends `Accept-Encoding: gzip` and decodes it. DokuWiki does no encoding of its own (`gzip_output=0`).
 - **Efficient media delivery** — large attachments are streamed by Apache (`mod_xsendfile`), not buffered through a PHP worker; DokuWiki's `xsendfile=2` hands the file off after its ACL check.
@@ -154,7 +154,8 @@ python3 tests/test_corkboard_logic.py
 ```
 
 CI (`.github/workflows/ci.yml`) runs that suite plus a lint pass (`ruff check`),
-a format pass (`ruff format --check`), and a type-check pass (`ty`) on every push
+a format pass (`ruff format --check`), a type-check pass (`ty`), and a
+wikitext-lint smoke test (the `lint` command on a clean fixture) on every push
 and pull request. The toolchain — `python`,
 `ruff`, `ty` — is declared in `mise.toml` and installed in CI by `mise-action`,
 so local and CI run identical versions:
@@ -164,7 +165,7 @@ mise install                          # python, ruff, ty
 ruff check .                          # lint
 ruff format --check .                 # format
 ty check skills/corkboard/script      # type-check the helper
-python3 tests/test_corkboard_logic.py # tests
+python3 tests/test_corkboard_logic.py # tests (incl. the linter)
 ```
 
 This isn't a Python project (no `pyproject.toml` / `uv`); ruff config lives in
@@ -206,6 +207,13 @@ rewrites (the bulk of real wiki work):
   the page changed under the agent, it refuses to clobber and says so.
 - **Link health after every write** — right after a save, the agent is told if it
   just created a broken link, instead of finding out later in a `wanted` report.
+- **A wikitext linter** (`lint` / `lint-all`) that catches the formatting
+  mistakes agents make most — Markdown that renders as literal text,
+  mixed-separator or indented tables that render as code blocks, list
+  continuations that render as code blocks, and namespace-relative links —
+  **before** the page is saved, with `--fix` for the auto-fixable ones. It's
+  pure string analysis (no wiki needed), so it runs on a local draft or in CI
+  too. See [skills/corkboard/SKILL.md](skills/corkboard/SKILL.md).
 
 The last two lean on the bundled Corkboard RPC plugin (`plugin.corkboard.cas`
 and `.linkhealth`), which answers in a single server-side call.

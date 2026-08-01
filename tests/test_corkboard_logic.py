@@ -413,6 +413,204 @@ def test_rpc_call_unwraps_jsonrpc_error_in_http_body():
         urllib.request.urlopen = orig
 
 
+def _rules(findings):
+    """Sorted rule ids from a findings list — compact way to assert which rules
+    fired (and that no others did)."""
+    return sorted({f.rule for f in findings})
+
+
+def test_lint_dw001_mixed_table_headers():
+    # Most common production breakage (14 across 11 pages in one scan): a header
+    # row that starts with ^ but mixes | separators renders the whole table as
+    # literal text.
+    check(
+        "mixed header detected",
+        _rules(cb.lint_wikitext("^ Col1 | Col2 |")),
+        ["DW001"],
+    )
+    check(
+        "mixed header fix replaces | with ^",
+        cb.lint_wikitext("^ Col1 | Col2 |")[0].suggestion,
+        "^ Col1 ^ Col2 ^",
+    )
+    check("all-^ header is clean", _rules(cb.lint_wikitext("^ Col1 ^ Col2 ^")), [])
+    check("all-| data row is clean (not a header)", _rules(cb.lint_wikitext("| a | b |")), [])
+
+
+def test_lint_dw002_indented_table_rows():
+    # A ^/| row with leading whitespace trips the 2-space code-block parser; the
+    # whole table renders as a gray code box.
+    f = cb.lint_wikitext("  ^ H ^\n  | d |")
+    check("indented header flagged", _rules(f), ["DW002"])
+    check(
+        "indented row reports the indent depth",
+        f[0].message,
+        "Indented table row (2-space) renders as code, not a table",
+    )
+    check("indented row fix strips leading ws", f[0].suggestion, "^ H ^")
+    check("column-0 table is clean", _rules(cb.lint_wikitext("^ H ^\n| d |")), [])
+
+
+def test_lint_dw003_list_continuation():
+    # The Markdown habit: a continuation indented to align with item text renders
+    # as a code block while the item's first line renders fine. Report only.
+    f = cb.lint_wikitext("  - **Item.** desc\n    continues here")
+    check("4-space continuation after list item flagged", _rules(f), ["DW003"])
+    check("DW003 is report-only (no suggestion)", f[0].suggestion, None)
+    check("same-line item is clean", _rules(cb.lint_wikitext("  - item all on one line")), [])
+    check(
+        "non-indented line after item is clean",
+        _rules(cb.lint_wikitext("  - item\nplain text")),
+        [],
+    )
+    # multi-line continuation: the second continuation is flagged too (list ctx persists)
+    check(
+        "multi-line continuation both flagged",
+        [x.line for x in cb.lint_wikitext("  - a\n    c1\n    c2") if x.rule == "DW003"],
+        [2, 3],
+    )
+
+
+def test_lint_dw004_markdown_headings():
+    check("# H1 -> 6 equals", cb.lint_wikitext("# Foo")[0].suggestion, "====== Foo ======")
+    check("## H2 -> 5 equals", cb.lint_wikitext("## Foo")[0].suggestion, "===== Foo =====")
+    check(
+        "###### H6 clamps to 2 equals (no DokuWiki H6)",
+        cb.lint_wikitext("###### Foo")[0].suggestion,
+        "== Foo ==",
+    )
+    check("ATX closing # stripped", cb.lint_wikitext("# Foo #")[0].suggestion, "====== Foo ======")
+    check("no-space-after-# is not a heading", _rules(cb.lint_wikitext("#tag")), [])
+    check("DokuWiki = heading is clean", _rules(cb.lint_wikitext("====== Foo ======")), [])
+
+
+def test_lint_dw005_markdown_links():
+    f = cb.lint_wikitext("see [text](https://x.org) here")
+    check("markdown link detected", _rules(f), ["DW005"])
+    check("markdown link fix swaps args", f[0].suggestion, "see [[https://x.org|text]] here")
+    check("DokuWiki [[url|text]] is clean", _rules(cb.lint_wikitext("[[https://x.org|text]]")), [])
+    check("DokuWiki [[page]] is clean", _rules(cb.lint_wikitext("[[a:b]]")), [])
+
+
+def test_lint_dw006_markdown_fences():
+    f = cb.lint_wikitext("```python\ncode\n```")
+    check("both fence lines flagged", [x.line for x in f if x.rule == "DW006"], [1, 3])
+    check(
+        "opening fence -> <code lang>",
+        [x for x in f if x.line == 1][0].suggestion,
+        "<code python>",
+    )
+    check("closing fence -> </code>", [x for x in f if x.line == 3][0].suggestion, "</code>")
+    check("bare fence -> <code>", cb.lint_wikitext("```")[0].suggestion, "<code>")
+    check("DokuWiki <code> is clean", _rules(cb.lint_wikitext("<code>\nx\n</code>")), [])
+
+
+def test_lint_dw007_namespace_relative_links():
+    # [[start]] on a page in projects: resolves to projects:start, not root.
+    f = cb.lint_wikitext("[[start]]", "projects")
+    check("bare token flagged in a namespace", _rules(f), ["DW007"])
+    check("bare token fix prepends colon", f[0].suggestion, "[[:start]]")
+    check("absolute [[:start]] is clean", _rules(cb.lint_wikitext("[[:start]]", "projects")), [])
+    check(
+        "multi-segment [[a:b]] is clean (root-relative)",
+        _rules(cb.lint_wikitext("[[a:b]]", "projects")),
+        [],
+    )
+    check(
+        "external [[https://x]] is clean",
+        _rules(cb.lint_wikitext("[[https://x|y]]", "projects")),
+        [],
+    )
+    check("interwiki [[wp>Foo]] is clean", _rules(cb.lint_wikitext("[[wp>Foo]]", "projects")), [])
+    check(
+        "same-page anchor [[#sec]] is clean", _rules(cb.lint_wikitext("[[#sec]]", "projects")), []
+    )
+    check(
+        "bare token in ROOT namespace is clean (no ambiguity)",
+        _rules(cb.lint_wikitext("[[start]]", "")),
+        [],
+    )
+
+
+def test_lint_dw008_links_in_headings():
+    f = cb.lint_wikitext("====== See [[x]] ======")
+    check("link in heading flagged", _rules(f), ["DW008"])
+    check("DW008 is report-only", f[0].suggestion, None)
+    check("plain heading is clean", _rules(cb.lint_wikitext("====== Title ======")), [])
+
+
+def test_lint_dw009_mediawiki_tags():
+    check("<gallery> flagged", _rules(cb.lint_wikitext("<gallery>")), ["DW009"])
+    check("</figure> flagged", _rules(cb.lint_wikitext("</figure>")), ["DW009"])
+    check(
+        "<figcaption class=x> flagged (with attrs)",
+        _rules(cb.lint_wikitext("<figcaption class=x>")),
+        ["DW009"],
+    )
+    check("DokuWiki <code> is clean", _rules(cb.lint_wikitext("<code>")), [])
+
+
+def test_lint_code_block_exclusion():
+    # The core correctness property: <code>/<file> and fence interiors are
+    # literal, so every rule must skip them. A dirty line that triggers 3 rules
+    # in the open triggers NONE inside a block.
+    dirty = "^ a | b |\n  | c |\n# h"  # DW001, DW002, DW004 in the open
+    check(
+        "dirty lines flagged in the open",
+        _rules(cb.lint_wikitext(dirty)),
+        ["DW001", "DW002", "DW004"],
+    )
+    blocked = "<code>\n" + dirty + "\n</code>"
+    check("same lines clean inside <code>", _rules(cb.lint_wikitext(blocked)), [])
+    fenced = "```\n" + dirty + "\n```"
+    check(
+        "interior clean inside a fence (only the 2 fences flagged)",
+        _rules(cb.lint_wikitext(fenced)),
+        ["DW006"],
+    )
+    # a fence nested inside <code> is literal -> not converted, doesn't toggle
+    check(
+        "fence inside <code> is clean",
+        _rules(cb.lint_wikitext("<code>\n```\n# h\n```\n</code>")),
+        [],
+    )
+
+
+def test_lint_findings_sorted():
+    f = cb.lint_wikitext("# h\n^ a | b\n[t](u)")
+    check(
+        "findings sorted by line then rule",
+        [(x.line, x.rule) for x in f],
+        [(1, "DW004"), (2, "DW001"), (3, "DW005")],
+    )
+
+
+def test_lint_namespace_helper():
+    check("projects:foo -> projects", cb._namespace_of("projects:foo"), "projects")
+    check("a:b:c -> a:b", cb._namespace_of("a:b:c"), "a:b")
+    check("start -> '' (root)", cb._namespace_of("start"), "")
+    check("'' -> ''", cb._namespace_of(""), "")
+
+
+def test_lint_fix():
+    # Each auto-fixable rule applied in place.
+    check("DW001 fix", cb.lint_fix("^ A | B")[0], "^ A ^ B")
+    check("DW002 fix", cb.lint_fix("  ^ A ^")[0], "^ A ^")
+    check("DW004 fix", cb.lint_fix("# H")[0], "====== H ======")
+    check("DW005 fix", cb.lint_fix("[t](u)")[0], "[[u|t]]")
+    check("DW006 fix", cb.lint_fix("```python\nx\n```"), ("<code python>\nx\n</code>", 2))
+    check("DW007 fix (needs namespace)", cb.lint_fix("[[start]]", "projects")[0], "[[:start]]")
+    # cascade: markdown link [t](bare) -> [[bare|t]] -> DW007 absolutizes -> [[:bare|t]]
+    check("DW005->DW007 cascade", cb.lint_fix("[t](start)", "projects")[0], "[[:start|t]]")
+    # report-only rules (DW003/8/9) are NOT touched by --fix
+    fixed, n = cb.lint_fix("<gallery>")
+    check("DW009 not auto-fixed", fixed, "<gallery>")
+    check("DW009 not counted as fixed", n, 0)
+    # clean content is a no-op
+    clean = "====== T ======\n^ A ^ B ^\n| 1 |"
+    check("clean content unchanged", cb.lint_fix(clean), (clean, 0))
+
+
 def main():
     for fn in (
         test_apply_edits,
@@ -426,6 +624,19 @@ def main():
         test_rpc_call_unwraps_jsonrpc_error_in_http_body,
         test_apply_resilience,
         test_apply_stop_on_first_error,
+        test_lint_dw001_mixed_table_headers,
+        test_lint_dw002_indented_table_rows,
+        test_lint_dw003_list_continuation,
+        test_lint_dw004_markdown_headings,
+        test_lint_dw005_markdown_links,
+        test_lint_dw006_markdown_fences,
+        test_lint_dw007_namespace_relative_links,
+        test_lint_dw008_links_in_headings,
+        test_lint_dw009_mediawiki_tags,
+        test_lint_code_block_exclusion,
+        test_lint_findings_sorted,
+        test_lint_namespace_helper,
+        test_lint_fix,
     ):
         fn()
     print(f"\n{_passed} passed, {_failed} failed")

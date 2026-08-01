@@ -33,11 +33,15 @@ Examples:
   corkboard.py search "full text"                       # full-text search
   corkboard.py media-upload diagram.png ns diag.png     # upload (binary or text)
   corkboard.py media-get ns:diag.png -o diag.png        # download
+  corkboard.py lint ns:page --fix                       # lint + auto-fix wikitext
+  corkboard.py lint --file page.txt                     # lint a local file (no RPC)
+  corkboard.py lint-all                                 # lint every page
   corkboard.py raw core.getMediaInfo '["ns:diag.png"]'  # escape hatch
 """
 
 import argparse
 import base64
+import collections
 import gzip
 import json
 import os
@@ -801,6 +805,445 @@ def cmd_apply(path, check, use_cas, stop_on_first_error=False):
         sys.exit(f"\n{len(bad)} of {len(results)} page(s) not applied")
 
 
+# ------------------------------------------------------------------- lint
+# DokuWiki wikitext linter (issue #4). PURE string analysis — no RPC, no
+# DokuWiki instance — so it runs in the test harness exactly like apply_edits /
+# locate_anchor. It catches the formatting mistakes agents make most: Markdown
+# that renders as literal text, mixed-separator / indented tables that render
+# as code blocks, list continuations that render as code blocks, namespace-
+# relative links, and links / MediaWiki tags that render raw. Every rule is
+# sourced from a real production breakage (issues #1–#3).
+#
+# Public surface (tested directly): lint_wikitext(content, namespace) ->
+# [Finding] and lint_fix(content, namespace) -> (new_content, n_fixed). The
+# cmd_lint / cmd_lint_all wrappers add the RPC + save plumbing.
+
+Finding = collections.namedtuple("Finding", ["line", "rule", "severity", "message", "suggestion"])
+
+# <code>/<file> blocks and ```/~~~ fences mark regions where content is literal
+# (not wikitext to lint). Every rule skips lines inside one, so a '# heading'
+# or '| cell |' inside a code sample is never flagged.
+_OPEN_TAG = re.compile(r"<(?:code|file)\b[^>]*>", re.IGNORECASE)
+_CLOSE_TAG = re.compile(r"</(?:code|file)\s*>", re.IGNORECASE)
+# Markdown [text](url) — the ')(' distinguishes it from DokuWiki [[...]] (no '(').
+_MD_LINK = re.compile(r"\[([^\]\[]+)\]\(([^)\s]+)[^)\]]*\)")
+# DokuWiki [[...]] link, for DW007 namespace-relative detection.
+_LINK_INNER = re.compile(r"\[\[([^\]]*?)\]\]")
+_MEDIAWIKI_TAGS = {"gallery", "figure", "figcaption"}
+
+
+def _code_mask(content):
+    """Boolean per line: True where the line is INSIDE a literal-code region
+    (a <code>/<file> block, or a ```/~~~ fenced block) and its content is not
+    wikitext to lint. Delimiter/tag lines themselves are False (so the fence
+    rule, DW006, can still flag them) — only interior content is masked."""
+    lines = content.split("\n")
+    mask = [False] * len(lines)
+    depth = 0
+    for i, line in enumerate(lines):
+        if depth > 0:
+            mask[i] = True
+        depth += len(_OPEN_TAG.findall(line)) - len(_CLOSE_TAG.findall(line))
+        if depth < 0:
+            depth = 0
+        if _OPEN_TAG.search(line):  # an opening tag line is interior to its block
+            mask[i] = True
+    fenced = False
+    for i, line in enumerate(lines):
+        if mask[i]:
+            continue  # a fence inside a <code>/<file> block is literal text
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fenced = not fenced
+            continue  # leave the delimiter unmasked so DW006 flags it
+        if fenced:
+            mask[i] = True
+    return mask
+
+
+def _md_link_to_dokuwiki(m):
+    return f"[[{m.group(2)}|{m.group(1)}]]"
+
+
+def _is_external(target):
+    return bool(re.match(r"^[a-z][a-z0-9+.-]*://", target, re.I)) or target.startswith("mailto:")
+
+
+def _is_relative_bare(target):
+    """A single-token internal link with no leading ':' — resolves under the
+    current namespace instead of from root. DW007's target."""
+    if not target or target.startswith(":") or target.startswith("#"):
+        return False
+    if ">" in target or ":" in target:  # interwiki / multi-segment (root-relative)
+        return False
+    return not _is_external(target)
+
+
+def _dw007_fix_line(line, namespace):
+    """Prepend ':' to every namespace-relative bare link on `line`.
+    Returns (fixed_line, count). No-op when namespace is empty (root)."""
+    if not namespace:
+        return line, 0
+    count = 0
+
+    def repl(m):
+        nonlocal count
+        inner = m.group(1)
+        if _is_relative_bare(inner.split("|", 1)[0]):
+            count += 1
+            return "[[:" + inner + "]]"
+        return m.group(0)
+
+    return _LINK_INNER.sub(repl, line), count
+
+
+def _dw001(lines, mask):
+    out = []
+    for i, ln in enumerate(lines):
+        if mask[i] or not re.match(r"^\s*\^", ln) or "|" not in ln:
+            continue
+        out.append(
+            Finding(
+                i + 1,
+                "DW001",
+                "ERROR",
+                "Mixed ^/| table header separators — whole table renders as literal text",
+                ln.replace("|", "^"),
+            )
+        )
+    return out
+
+
+def _dw002(lines, mask):
+    out = []
+    for i, ln in enumerate(lines):
+        m = re.match(r"^(\s+)([\^\|])", ln)
+        if mask[i] or not m:
+            continue
+        fixed = ln.lstrip(" \t")
+        out.append(
+            Finding(
+                i + 1,
+                "DW002",
+                "ERROR",
+                f"Indented table row ({len(m.group(1))}-space) renders as code, not a table",
+                fixed,
+            )
+        )
+    return out
+
+
+def _dw003(lines, mask):
+    out = []
+    prev_list_ctx = False  # prev line was a list item OR a flagged continuation
+    for i, ln in enumerate(lines):
+        is_item = (not mask[i]) and bool(re.match(r"^\s*[*-]\s", ln))
+        lead = len(ln) - len(ln.lstrip(" \t"))
+        is_cont = (not mask[i]) and lead >= 4 and not is_item and ln.strip() != ""
+        if is_cont and prev_list_ctx:
+            out.append(
+                Finding(
+                    i + 1,
+                    "DW003",
+                    "ERROR",
+                    "List-item continuation indented 4+ spaces renders as a code block — "
+                    "keep each item on one line",
+                    None,
+                )
+            )
+        prev_list_ctx = is_item or (is_cont and prev_list_ctx)
+    return out
+
+
+def _dw004(lines, mask):
+    out = []
+    for i, ln in enumerate(lines):
+        if mask[i]:
+            continue
+        m = re.match(r"^\s*(#{1,6})\s+(.*\S)", ln)
+        if not m:
+            continue
+        text = re.sub(r"\s*#+\s*$", "", m.group(2))  # strip ATX closing #'s
+        if not text:
+            continue
+        eq = max(2, 7 - len(m.group(1)))  # 1#->6= ... 5#->2=; 6# clamps to 2= (no H6)
+        bar = "=" * eq
+        out.append(
+            Finding(
+                i + 1,
+                "DW004",
+                "WARNING",
+                "Markdown heading (#) renders as literal text — use DokuWiki =...= headings",
+                f"{bar} {text} {bar}",
+            )
+        )
+    return out
+
+
+def _dw005(lines, mask):
+    out = []
+    for i, ln in enumerate(lines):
+        if mask[i] or not _MD_LINK.search(ln):
+            continue
+        out.append(
+            Finding(
+                i + 1,
+                "DW005",
+                "WARNING",
+                "Markdown link [text](url) renders as literal text — use [[url|text]]",
+                _MD_LINK.sub(_md_link_to_dokuwiki, ln),
+            )
+        )
+    return out
+
+
+def _dw006(lines, mask):
+    out = []
+    fenced = False
+    for i, ln in enumerate(lines):
+        if mask[i]:
+            continue
+        stripped = ln.strip()
+        if not (stripped.startswith("```") or stripped.startswith("~~~")):
+            continue
+        lang = stripped.lstrip("`~").strip()
+        fixed = f"<code {lang}>" if (lang and not fenced) else ("</code>" if fenced else "<code>")
+        out.append(
+            Finding(
+                i + 1,
+                "DW006",
+                "WARNING",
+                "Markdown code fence (``` or ~~~) renders as literal text — use <code>…</code>",
+                fixed,
+            )
+        )
+        fenced = not fenced
+    return out
+
+
+def _dw007(lines, mask, namespace):
+    out = []
+    if not namespace:
+        return out  # in the root namespace a bare token already resolves from root
+    for i, ln in enumerate(lines):
+        if mask[i]:
+            continue
+        fixed, n = _dw007_fix_line(ln, namespace)
+        if not n:
+            continue
+        targets = [
+            m.group(1).split("|", 1)[0]
+            for m in _LINK_INNER.finditer(ln)
+            if _is_relative_bare(m.group(1).split("|", 1)[0])
+        ]
+        out.append(
+            Finding(
+                i + 1,
+                "DW007",
+                "WARNING",
+                "Namespace-relative link(s) "
+                + ", ".join(f"[[{t}]]" for t in targets)
+                + f" resolve under {namespace}: — prefer absolute [[:…]]",
+                fixed,
+            )
+        )
+    return out
+
+
+def _dw008(lines, mask):
+    out = []
+    for i, ln in enumerate(lines):
+        if mask[i] or _heading_text(ln) is None or ("[[" not in ln and "]]" not in ln):
+            continue
+        out.append(
+            Finding(
+                i + 1,
+                "DW008",
+                "WARNING",
+                "Link inside a heading renders raw on this build — move the link to the body",
+                None,
+            )
+        )
+    return out
+
+
+def _dw009(lines, mask):
+    out = []
+    for i, ln in enumerate(lines):
+        if mask[i]:
+            continue
+        for m in re.finditer(r"</?([a-zA-Z]+)[^>]*>", ln):
+            name = m.group(1).lower()
+            if name in _MEDIAWIKI_TAGS:
+                out.append(
+                    Finding(
+                        i + 1,
+                        "DW009",
+                        "WARNING",
+                        f"MediaWiki-only <{name}> renders as literal text in DokuWiki "
+                        "— use DokuWiki syntax",
+                        None,
+                    )
+                )
+    return out
+
+
+def lint_wikitext(content, namespace=""):
+    """Lint raw DokuWiki wikitext (pure — no RPC). Returns Finding namedtuples
+    (line, rule, severity, message, suggestion) sorted by line then rule.
+    `namespace` is the page's namespace ('projects' for 'projects:foo'); pass ''
+    for root/unknown (DW007 is a no-op there)."""
+    lines = content.split("\n")
+    mask = _code_mask(content)
+    findings = []
+    for fn in (_dw001, _dw002, _dw003, _dw004, _dw005, _dw006, _dw008, _dw009):
+        findings += fn(lines, mask)
+    findings += _dw007(lines, mask, namespace)
+    findings.sort(key=lambda f: (f.line, f.rule))
+    return findings
+
+
+def _lint_fix_once(content, namespace=""):
+    """One pass of auto-fixable rules (DW001/2/4/5/6/7). DW003/8/9 are
+    report-only (intent-dependent). Returns (new_content, lines_changed)."""
+    lines = content.split("\n")
+    mask = _code_mask(content)
+    fenced = False
+    changed = 0
+    for i, ln in enumerate(lines):
+        if mask[i]:
+            continue
+        new = ln
+        if re.match(r"^\s*\^", new) and "|" in new:  # DW001
+            new = new.replace("|", "^")
+        if re.match(r"^\s+[\^\|]", new):  # DW002
+            new = new.lstrip(" \t")
+        mh = re.match(r"^\s*(#{1,6})\s+(.*\S)", new)  # DW004
+        if mh:
+            text = re.sub(r"\s*#+\s*$", "", mh.group(2))
+            if text:
+                eq = max(2, 7 - len(mh.group(1)))
+                bar = "=" * eq
+                new = f"{bar} {text} {bar}"
+        if namespace:  # DW007 (before DW005 so a converted [[bare|t]] isn't re-seen)
+            new, _ = _dw007_fix_line(new, namespace)
+        if _MD_LINK.search(new):  # DW005
+            new = _MD_LINK.sub(_md_link_to_dokuwiki, new)
+        stripped = new.strip()  # DW006
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            lang = stripped.lstrip("`~").strip()
+            new = (
+                f"<code {lang}>" if (lang and not fenced) else ("</code>" if fenced else "<code>")
+            )
+            fenced = not fenced
+        if new != ln:
+            lines[i] = new
+            changed += 1
+    return "\n".join(lines), changed
+
+
+def lint_fix(content, namespace=""):
+    """Apply auto-fixable rules until the content stops changing (a markdown
+    link [t](bare) becomes [[bare|t]], which DW007 then absolutizes on the next
+    pass). Returns (new_content, total_lines_changed)."""
+    total = 0
+    for _ in range(5):  # cap: each rule is idempotent, so this converges fast
+        new, n = _lint_fix_once(content, namespace)
+        if new == content:
+            break
+        content = new
+        total += n
+    return content, total
+
+
+def _namespace_of(page):
+    """Namespace portion of a page id ('projects:foo' -> 'projects'; 'start' ->
+    ''). DW007 uses it to decide which [[bare]] links are namespace-relative."""
+    return ":".join(page.split(":")[:-1]) if page else ""
+
+
+def _truncate(s, n=70):
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _format_finding(f, page):
+    s = f"{page}  L{f.line:<4} {f.rule} {f.severity:<7}  {f.message}"
+    if f.suggestion is not None:
+        s += f"  -> {_truncate(f.suggestion)}"
+    return s
+
+
+def cmd_lint(page, fix, file, use_stdin, ns, use_cas):
+    """Lint one page (RPC) or a local file / stdin (no RPC). --fix applies the
+    auto-fixable rules and writes back (page via CAS, file in place, stdin to
+    stdout); remaining non-fixable findings are then reported. Exits 1 if any
+    finding remains, 0 if clean."""
+    if file:
+        with open(file, encoding="utf-8") as f:
+            content = f.read()
+        namespace = ns or _namespace_of(page)
+    elif use_stdin:
+        content = sys.stdin.read()
+        namespace = ns or _namespace_of(page)
+    else:
+        content = rpc("core.getPage", [page]) or ""
+        namespace = _namespace_of(page)
+    display = page or file or "<stdin>"
+
+    if fix:
+        new_content, n_fixed = lint_fix(content, namespace)
+        changed = new_content != content
+        if changed:
+            if file:
+                with open(file, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                print(f"fixed {n_fixed} line(s) in {file}", file=sys.stderr)
+            elif use_stdin:
+                sys.stdout.write(new_content)
+            else:
+                _commit(page, content, new_content, "lint: auto-fix wikitext", False, use_cas)
+        else:
+            print("(no auto-fixable issues)", file=sys.stderr)
+        sink = sys.stderr if use_stdin else sys.stdout  # don't mix findings into fixed stdout
+        remaining = lint_wikitext(new_content, namespace)
+        for f in remaining:
+            print(_format_finding(f, display), file=sink)
+        if remaining:
+            sys.exit(1)
+        return
+
+    findings = lint_wikitext(content, namespace)
+    for f in findings:
+        print(_format_finding(f, display))
+    if findings:
+        sys.exit(1)
+    print(f"({display}: no issues found)", file=sys.stderr)
+
+
+def cmd_lint_all(fix, use_cas):
+    """Lint every page (loops `all`). Progress on stderr, findings on stdout.
+    --fix auto-fixes each page in place (CAS). Exits 1 if any finding remains."""
+    pages = [
+        p.get("id") if isinstance(p, dict) else p for p in (rpc("core.listPages", ["", 0]) or [])
+    ]
+    print(f"linting {len(pages)} pages...", file=sys.stderr)
+    total = 0
+    for page in pages:
+        content = rpc("core.getPage", [page]) or ""
+        namespace = _namespace_of(page)
+        if fix:
+            new_content, _ = lint_fix(content, namespace)
+            if new_content != content:
+                _commit(page, content, new_content, "lint: auto-fix wikitext", False, use_cas)
+            content = new_content
+        for f in lint_wikitext(content, namespace):
+            print(_format_finding(f, page))
+            total += 1
+    print(f"{total} finding(s) across {len(pages)} pages", file=sys.stderr)
+    if total:
+        sys.exit(1)
+
+
 # ------------------------------------------------------------------- subcommands
 def _read_input(args):
     if args.file:
@@ -1017,6 +1460,41 @@ def main():
     raw.add_argument("method")
     raw.add_argument("params", help="JSON array of params", nargs="?", default="[]")
 
+    lt = sp.add_parser(
+        "lint",
+        help="lint a page (or --file/--stdin) for wikitext mistakes; --fix auto-fixes",
+    )
+    lt.add_argument("page", nargs="?", help="page id (required unless --file/--stdin)")
+    lt.add_argument("--fix", action="store_true", help="auto-fix DW001/2/4/5/6/7 and save")
+    lt.add_argument("--file", help="lint a local file instead of fetching a page (no RPC)")
+    lt.add_argument(
+        "--stdin",
+        dest="use_stdin",
+        action="store_true",
+        help="read wikitext from stdin (no RPC); with --fix, write fixed text to stdout",
+    )
+    lt.add_argument(
+        "--ns",
+        help="namespace for DW007 link checks (defaults to the page's namespace)",
+    )
+    lt.add_argument(
+        "--no-cas",
+        dest="cas",
+        action="store_false",
+        default=True,
+        help="skip concurrency-safe compare-and-swap on a --fix save",
+    )
+
+    la = sp.add_parser("lint-all", help="lint every page (loops `all`); --fix auto-fixes")
+    la.add_argument("--fix", action="store_true", help="auto-fix DW001/2/4/5/6/7 on each page")
+    la.add_argument(
+        "--no-cas",
+        dest="cas",
+        action="store_false",
+        default=True,
+        help="skip concurrency-safe compare-and-swap on a --fix save",
+    )
+
     args = ap.parse_args()
     if args.cmd == "get":
         sys.stdout.write(rpc("core.getPage", [args.page]) or "")
@@ -1110,6 +1588,12 @@ def main():
         except json.JSONDecodeError as e:
             sys.exit(f"corkboard: raw params must be a JSON array: {e}")
         print(json.dumps(rpc(args.method, params), indent=2, default=str))
+    elif args.cmd == "lint":
+        if not args.page and not args.file and not args.use_stdin:
+            sys.exit("corkboard: lint needs a page id (or --file / --stdin)")
+        cmd_lint(args.page, args.fix, args.file, args.use_stdin, args.ns, args.cas)
+    elif args.cmd == "lint-all":
+        cmd_lint_all(args.fix, args.cas)
 
 
 if __name__ == "__main__":

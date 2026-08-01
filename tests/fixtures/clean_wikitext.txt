@@ -1,0 +1,47 @@
+====== Project Foo ======
+
+A short summary of Project Foo. The hub index is at [[:projects:start]] and
+the root landing page is [[:start]].
+
+===== Status =====
+
+//Status: in progress// — see the design notes at [[:design:foo]].
+
+===== Details =====
+
+This page covers the design and current state.
+
+==== Results ====
+
+^ Run ^ Score ^ Notes ^
+| 1 | 2.84 | baseline |
+| 2 | 2.91 | tuned lr |
+| 3 | 2.95 | spans both ::: |
+
+==== Checklist ====
+
+  * item one
+  * item two with a forced linebreak\\ on the same item
+  * nested group
+    * sub-item a
+    * sub-item b
+  - ordered first
+  - ordered second
+
+==== Code sample ====
+
+<code python>
+def f():
+    return 42  # a literal comment, not a heading
+</code>
+
+Inline ''monospace'' and an [[https://example.org|external link]] both render
+fine. Two images side by side use multiple {{a.png}} {{b.png}} on one line.
+
+===== Notes =====
+
+Horizontal rules use four dashes:
+
+----
+
+Back to [[:projects:start]] · [[:start]]

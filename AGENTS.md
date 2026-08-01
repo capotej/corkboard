@@ -42,7 +42,8 @@ is no `pyproject.toml`, no `uv`, no `pip`. Tool versions come from `mise.toml`.
 - **Type-check:** `ty check skills/corkboard/script` (zero-config; point at the source, not `.`).
 
 CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`,
-`ty check`, and the tests on every push/PR, with the
+`ty check`, a wikitext-lint smoke test (the skill's `lint` command on a clean
+fixture), and the tests on every push/PR, with the
 toolchain installed by `jdx/mise-action` straight from `mise.toml`. The skill
 has **no type annotations** today, so `ty` is a light pass that grows in value
 as annotations are added.

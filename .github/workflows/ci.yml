@@ -27,5 +27,7 @@ jobs:
         run: ruff format --check .
       - name: ty check
         run: ty check skills/corkboard/script
+      - name: Lint fixture (smoke-test the lint command)
+        run: python3 skills/corkboard/script/corkboard.py lint --file tests/fixtures/clean_wikitext.txt
       - name: Tests
         run: python3 tests/test_corkboard_logic.py
