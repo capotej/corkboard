@@ -142,11 +142,11 @@ OpenViking L0/L1/L2) by returning just the summary line or the whole page:
 
 ```python
 [
-  corkboard_search,   # → core.searchPages          (recall; prefetch reuses this)
-  corkboard_read,     # → core.getPage              (read by id, tiered)
-  corkboard_remember, # → core.savePage / append    (store a structured fact)
-  corkboard_forget,   # → savePage("")              (empty — no true delete)
-  # optional: corkboard_browse → sitemap / list
+    corkboard_search,  # → core.searchPages          (recall; prefetch reuses this)
+    corkboard_read,  # → core.getPage              (read by id, tiered)
+    corkboard_remember,  # → core.savePage / append    (store a structured fact)
+    corkboard_forget,  # → savePage("")              (empty — no true delete)
+    # optional: corkboard_browse → sitemap / list
 ]
 ```
 
@@ -160,11 +160,15 @@ Minimal schema — secrets to `.env`, the rest to `$HERMES_HOME/corkboard.json`
 
 ```python
 [
-  {"key":"url",  "required":True, "env_var":"CORKBOARD_URL"},
-  {"key":"user", "required":True, "env_var":"CORKBOARD_USER"},
-  {"key":"pass", "required":True, "secret":True, "env_var":"CORKBOARD_PASS"},
-  {"key":"auto_capture", "default":False, "description":"auto-persist turns (LOW-SECURITY wiki)"},
-  {"key":"shared_namespace","default":"memories:shared"},
+    {"key": "url", "required": True, "env_var": "CORKBOARD_URL"},
+    {"key": "user", "required": True, "env_var": "CORKBOARD_USER"},
+    {"key": "pass", "required": True, "secret": True, "env_var": "CORKBOARD_PASS"},
+    {
+        "key": "auto_capture",
+        "default": False,
+        "description": "auto-persist turns (LOW-SECURITY wiki)",
+    },
+    {"key": "shared_namespace", "default": "memories:shared"},
 ]
 ```
 
@@ -203,18 +207,20 @@ Concrete enough to ground the contract; not the full implementation:
 ```python
 class CorkboardMemoryProvider(MemoryProvider):
     @property
-    def name(self): return "corkboard"
+    def name(self):
+        return "corkboard"
 
-    def is_available(self):                       # NO network
-        return all(os.environ.get(k) for k in
-                   ("CORKBOARD_URL", "CORKBOARD_USER", "CORKBOARD_PASS"))
+    def is_available(self):  # NO network
+        return all(
+            os.environ.get(k) for k in ("CORKBOARD_URL", "CORKBOARD_USER", "CORKBOARD_PASS")
+        )
 
     def initialize(self, session_id, **kw):
         self._session_id = session_id
         self._identity = kw.get("agent_identity") or "default"
-        self._ns = f"memories:{self._identity}"   # profile isolation via namespace
+        self._ns = f"memories:{self._identity}"  # profile isolation via namespace
         self._auto_capture = self._read_cfg("auto_capture", False)
-        self._cache = {}                          # session_id -> prefetch result
+        self._cache = {}  # session_id -> prefetch result
         self._lock = threading.Lock()
 
     def prefetch(self, query, *, session_id=""):
@@ -225,17 +231,17 @@ class CorkboardMemoryProvider(MemoryProvider):
         return self._do_search(query, session_id)  # synchronous on turn 1
 
     def queue_prefetch(self, query, *, session_id=""):
-        threading.Thread(target=self._do_search,
-                         args=(query, session_id), daemon=True).start()
+        threading.Thread(target=self._do_search, args=(query, session_id), daemon=True).start()
 
     def sync_turn(self, u, a, *, session_id="", messages=None):
         if not self._auto_capture:
             return
-        threading.Thread(target=self._append_turn,
-                         args=(u, a, session_id), daemon=True).start()
+        threading.Thread(target=self._append_turn, args=(u, a, session_id), daemon=True).start()
 
-    def get_tool_schemas(self):  return TOOL_SCHEMAS
-    def handle_tool_call(self, name, args, **kw): ...   # -> JSON string
+    def get_tool_schemas(self):
+        return TOOL_SCHEMAS
+
+    def handle_tool_call(self, name, args, **kw): ...  # -> JSON string
     def shutdown(self): ...
 ```
 

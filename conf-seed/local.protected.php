@@ -32,6 +32,14 @@ $conf['sneaky_index'] = 1;
 $conf['remote']     = 1;
 $conf['remoteuser'] = '@api,@admin';
 
+// Media revisions: keep deleted/overwritten media in media_attic so it is
+// restorable via the Media Manager. Now load-bearing because the agent (@api)
+// has AUTH_DELETE (see acl.auth.php + rfcs/2026-08-01_move-plugin-rpc.md):
+// without it, a media delete is the one genuinely irrecoverable op. Locked
+// here so the web Config Manager can't flip it off. (DokuWiki's default is
+// already on; this makes it explicit and unchangeable from the UI.)
+$conf['mediarevisions'] = 1;
+
 // Don't phone home. DokuWiki's update check periodically fetches
 // update.dokuwiki.org (and reports the running version). We ship a pinned
 // release and disable popularity reporting via plugins.local.php; turning

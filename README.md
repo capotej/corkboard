@@ -11,9 +11,9 @@ What Corkboard ships with out of the box:
 - **Login-only (closed by default)** — anonymous access is denied (`@ALL 0`); reading or writing requires a login. No self-registration, no password resets.
 - **JSON-RPC API** — DokuWiki's Remote API is enabled and restricted to the `@api`/`@admin` groups, for programmatic read/write over HTTP Basic auth.
 - **All safe upload formats** — ~150 file types allowed (text, source code, data/config, archives, fonts, e-books, …); `html`/`htm` are blocked (XSS vector).
-- **Corkboard RPC + action plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that gives the agent single-call answers the core API can't: wanted/orphan pages, unreferenced media, per-page **link health**, and **compare-and-swap** writes (so a surgical edit never silently clobbers a concurrent one). Its action component re-indexes a namespace's `start` page whenever a page is created or deleted under it, keeping `orphans`/`backlinks` immediately consistent with the nspages auto-index below.
+- **Corkboard RPC + action plugin** — a bundled server-side plugin (`plugin.corkboard.*`) that gives the agent single-call answers the core API can't: wanted/orphan pages, unreferenced media, per-page **link health**, and **compare-and-swap** writes (so a surgical edit never silently clobbers a concurrent one), plus **move/rename** (history-preserving, via the move plugin). Its action component re-indexes a namespace's `start` page whenever a page is created or deleted under it, keeping `orphans`/`backlinks` immediately consistent with the nspages auto-index below.
 - **Auto-generated namespace indexes (nspages)** — every namespace's `start` page lists its children with a single `<nspages>` tag, so landing-page hubs can't drift as pages come and go. Because nspages emits links through the standard renderer, they register as backlinks — so nspages-listed pages are never false orphans. Bundled, pinned to an upstream commit, and SHA-256-verified in the image.
-- **Agent skill** — a stdlib-only Python skill (`skills/corkboard/`) the agent uses to read, write, organize, and garden the wiki — including **surgical** in-place edits and anchor inserts, in-page search, batch edits across pages, and a **wikitext linter** that catches Markdown-and-table rendering breakage before a save. See `skills/corkboard/SKILL.md`.
+- **Agent skill** — a stdlib-only Python skill (`skills/corkboard/`) the agent uses to read, write, organize, and garden the wiki — including **surgical** in-place edits and anchor inserts, in-page search, batch edits across pages, **move/rename** of pages & media, and a **wikitext linter** that catches Markdown-and-table rendering breakage before a save. See `skills/corkboard/SKILL.md`.
 - **No phone-home** — `updatecheck=0`; the `popularity` plugin is disabled.
 - **Gzip over the wire** — Apache (`mod_deflate`) compresses text responses for browsers and the agent; the skill sends `Accept-Encoding: gzip` and decodes it. DokuWiki does no encoding of its own (`gzip_output=0`).
 - **Efficient media delivery** — large attachments are streamed by Apache (`mod_xsendfile`), not buffered through a PHP worker; DokuWiki's `xsendfile=2` hands the file off after its ACL check.
@@ -45,7 +45,7 @@ directories onto that volume on every boot — see
 | `conf-seed/`                | Locked-down config templates: closed ACL, `useacl`, JSON-RPC, disabled plugins, broad upload allowlist |
 | `bootstrap-user.php`        | Creates the `admin` and `agent` accounts from Fly secrets (bcrypt, idempotent) |
 | `skills/corkboard/`         | The agent skill: a Python JSON-RPC client (`script/corkboard.py`) + `SKILL.md` |
-| `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): wanted/orphans/media-orphans, per-page link health, compare-and-swap writes, and an action hook that re-indexes namespace `start` pages on page create/delete (keeps `orphans`/`backlinks` fresh with nspages) |
+| `corkboard-plugin/`         | Server-side DokuWiki plugin (`plugin.corkboard.*`): wanted/orphans/media-orphans, per-page link health, compare-and-swap writes, history-preserving move/rename, and an action hook that re-indexes namespace `start` pages on page create/delete (keeps `orphans`/`backlinks` fresh with nspages) |
 | `apache-deny-sensitive.conf`| Blocks direct HTTP access to `data/` `conf/` `bin/` `inc/` `vendor/`, and sets `Options -Indexes -ExecCGI` |
 | `apache-hardening.conf`    | Server fingerprint/`TRACE` off, security response headers (HSTS gated on `X-Forwarded-Proto`), Slowloris caps |
 | `remoteip.conf`            | Recover the real client IP from Fly's proxy (`mod_remoteip` on `Fly-Client-IP`) |
@@ -129,8 +129,8 @@ password changes you make in the UI survive.
 
 The `agent` account (groups `user,api`) is the identity an agent uses to talk to
 the wiki over JSON-RPC. It's created from the required `CORKBOARD_AGENT_PASS`
-secret on first boot in `conf/users.auth.php`. It has **read + update** but
-**not delete** (details in `skills/corkboard/SKILL.md`).
+secret on first boot in `conf/users.auth.php`. It has **read + update + delete** (delete is attic-recoverable; details
+in `skills/corkboard/SKILL.md`).
 
 ### Install the skill
 
@@ -203,6 +203,7 @@ rewrites (the bulk of real wiki work):
 - **Anchor inserts** — add content under a heading, or after/before a specific line.
 - **In-page search** with line numbers, to find the right anchor before editing.
 - **Batch edits** across several pages from one plan, with a per-page report.
+- **Move/rename** (`move`) a page, media file, or whole namespace — history-preserving (the attic relocates) with every backlink rewritten, via the move plugin.
 - **Concurrency-safe writes** — every surgical write is a compare-and-swap: if
   the page changed under the agent, it refuses to clobber and says so.
 - **Link health after every write** — right after a save, the agent is told if it

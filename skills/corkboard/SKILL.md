@@ -187,6 +187,7 @@ skill dir: `<skill>/script/corkboard.py`.
 | `edit <page> (--old O --new N)+ [--edits F] [--sum S] [--show-context]` | **surgical replace** — asserts `--old` is unique; repeat pairs for multi-edit | `getPage`→`cas` |
 | `insert <page> (--under H\|--after L\|--before L) [--text T\|--file F] [--sum S]` | **insert at an anchor** (heading or line) | `getPage`→`cas` |
 | `apply <plan.json>` | **batch** edits/inserts/replaces across pages | `getPage`→`cas` |
+| `move <src> <dst> [--kind page\|media] [--ns] [--no-rewrite] [--autoskip]` | **move/rename** page/media/namespace (history kept, backlinks rewritten) | `plugin.corkboard.move` |
 | `delete <page>` | **clear** page content (an update) | `core.savePage` w/ `""` |
 | `list <ns> [--depth N]` | page ids (recursive; `--depth N`) | `core.listPages` |
 | `all` | every page id | `core.listPages("", 0)` |
@@ -316,6 +317,44 @@ unique anchor for `edit`/`insert`.
 fresh id). Media ids are `<ns>:<name>` (or just `<name>` for the root ns).
 `list` is **recursive by default** (`--depth 0`); `--depth N` descends N levels.
 
+## Move: real renames, history preserved
+
+`move` renames a page, a media file, or a whole namespace by delegating to the
+**move plugin** (`plugin.corkboard.move` → its `helper_plugin_move_plan` API) —
+not a copy-and-clear. That distinction matters: the move plugin **relocates
+the attic** (so the destination inherits the source's full revision history,
+edit summaries, and authorship — provenance is preserved, the thing the core
+API structurally cannot do) and **rewrites every backlink** across the wiki in
+its own pass, atomically, using DokuWiki's parser/index rather than
+client-side pattern-matching.
+
+```bash
+python3 script/corkboard.py move old:name new:name                       # rename a page
+python3 script/corkboard.py move old:file.png new:file.png --kind media   # rename media
+python3 script/corkboard.py move oldns: newns: --ns                      # move a whole namespace
+python3 script/corkboard.py move a:page b:page --no-rewrite              # move w/o touching backlinks (rare)
+```
+
+- **Auth.** Pages need AUTH_EDIT (src) + AUTH_CREATE (dst); media needs
+  AUTH_DELETE (src) + AUTH_UPLOAD (dst). Both are satisfied by the agent's own
+  ACL (`@api 16`), so the RPC needs no elevation. A move lacking perms fails
+  with `reason:'no_auth'` before touching anything.
+- **Refusals.** `move` returns a `reason` instead of moving when: the move
+  plugin isn't installed (`no_plugin`); another move is already committed — plan
+  state is **global and non-reentrant**, so moves **serialize wiki-wide**
+  (`in_progress` → retry shortly); the source doesn't exist (`not_found`); the
+  destination already exists (`exists`); or the move exceeded the step cap and
+  should go through the web UI (`too_large`).
+- **No redirect is left behind.** The rewrite fixes the internal link graph, so
+  inbound links never dangle; the plugin does not leave a `Moved to` stub. (Old
+  *external* bookmarks are out of scope — that's the separate `moved`
+  companion plugin.)
+- **Media moves are less auditable** — the move plugin itself notes media moves
+  don't create a changelog entry, unlike page moves (which get a `↷ moved`
+  summary).
+- **Requires the move plugin** (2024-05-07+) at `lib/plugins/move`. Without it
+  `move` returns `no_plugin`. See `rfcs/2026-08-01_move-plugin-rpc.md`.
+
 ## Orientation: `sitemap` before you place a page
 
 Before deciding where a new page belongs (or just to see the wiki at a glance),
@@ -429,18 +468,32 @@ the limit is server-side. So:
   `HTTP 413 (not a JSON-RPC response): …nginx…` — instead of guessing. A `413`
   means a body limit; a JSON-RPC error code means DokuWiki itself rejected it.
 
-## Permissions: read + update, NOT delete
+## Permissions: read + update + delete (attic-recoverable)
 
-The token has **READ + UPDATE** but **NOT DELETE**. Concretely:
+The agent (`@api`) has **READ + UPDATE + DELETE** — DELETE (16) was granted on
+top of `@user`'s UPLOAD (8) so the move plugin's media moves pass their
+`AUTH_DELETE` check without elevation code (ACL takes the highest permission
+across matched groups, so ordinary `@user` members stay at 8; see
+`conf-seed/acl.auth.php` and `rfcs/2026-08-01_move-plugin-rpc.md`). Concretely:
 
-- **Pages:** read ✓, write/replace ✓ (`core.savePage`), append ✓, and emptying
-  ✓. There is no `core.deletePage`; the helper's `delete` clears a page by
-  saving empty text — that's an **update** (it empties current content), not a
-  true delete. It's the only page-removal lever the token has.
-- **Media:** upload ✓ (incl. overwrite), list/read ✓. **`core.deleteMedia`
-  returns 403** (the token can't delete). To remove stray media, use the **web
-  Media Manager** (`doku.php?do=media&ns=<ns>`). Plan uploads to overwrite
-  rather than create throwaways.
+- **Pages:** read ✓, write/replace ✓ (`core.savePage`), append ✓, and clearing
+  ✓ (saving empty text — an *update*, the only page-removal lever; there is no
+  `core.deletePage`). Clearing removes the current page file but **the attic
+  (old revisions) is retained**, so a cleared/deleted page is restorable from
+  its history (web UI: Old Revisions; or via the API — restoration is a write).
+  Purging the attic is **admin-only** (no `core.*` for it), so history is
+  tamper-evident even against this token.
+- **Media:** upload ✓ (incl. overwrite), list/read ✓, and **delete ✓**
+  (`core.deleteMedia` now succeeds for the agent). Deletion is recoverable
+  **only because `$conf['mediarevisions']` is locked on** (see
+  `local.protected.php`): a deleted file moves to `media_attic` and restores via
+  the Media Manager's history. The **web Media Manager**
+  (`doku.php?do=media&ns=<ns>`) remains the path for *irreversible* removal or
+  bulk cleanup. Plan uploads to overwrite rather than create throwaways.
+
+> **Why grant delete at all?** A leaked level-8 token can already mass-*edit*
+> (equally attic-recoverable), so delete adds no new class of irrecoverable
+> harm; the attic net + admin-only purge keep every delete reversible.
 
 ## Authoritative method reference
 
@@ -556,8 +609,11 @@ and `wanted`/`orphans` post-save.
 
 ## Gotchas
 
-- **No delete permission** → `core.deleteMedia` is 403; pages can only be
-  *emptied* (an update), not truly deleted. Web Media Manager for media cleanup.
+- **Delete is attic-recoverable** → `core.deleteMedia` now works for the agent
+  (it has DELETE), and pages can be *emptied* (an update). Both are reversible:
+  the attic retains old page revisions, and `media_attic` retains deleted media
+  (because `mediarevisions` is locked on). Purging either is admin-only. Use the
+  web Media Manager for irreversible / bulk media cleanup.
 - **IDs are lowercased.** `Foo.png` is stored as `foo.png`; `Page` as `page`.
   Fetch/overwrite by the lowercased id.
 - **`[[links]]` render raw inside `===== headings =====`** on this build — keep

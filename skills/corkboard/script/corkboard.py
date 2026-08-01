@@ -805,6 +805,49 @@ def cmd_apply(path, check, use_cas, stop_on_first_error=False):
         sys.exit(f"\n{len(bad)} of {len(results)} page(s) not applied")
 
 
+def build_move_opts(kind, ns, rewrite, autoskip):
+    """Build the plugin.corkboard.move opts payload from CLI flags. Pure (no
+    RPC) so it's unit-tested directly alongside the other payload builders."""
+    return {
+        "kind": "media" if kind == "media" else "page",
+        "ns": bool(ns),
+        "rewrite": bool(rewrite),
+        "autoskip": bool(autoskip),
+    }
+
+
+_MOVE_HINTS = {
+    "no_auth": "the token lacks the needed ACL (page: edit+create; media: delete+upload)",
+    "in_progress": "another move is running (plan state is global); retry shortly",
+    "exists": "the destination already exists",
+    "not_found": "the source does not exist",
+    "no_plugin": "the move plugin is not installed (lib/plugins/move)",
+    "too_large": "exceeded the step cap; use the web UI move tool",
+}
+
+
+def cmd_move(src, dst, kind, ns, rewrite, autoskip, check):
+    """Move/rename a page, media file, or namespace via plugin.corkboard.move
+    (which delegates to the move plugin: attic preserved, backlinks rewritten).
+    Prints the outcome and, for a single page move, runs link-health on the
+    destination to catch any link the rewrite stranded."""
+    opts = build_move_opts(kind, ns, rewrite, autoskip)
+    res = rpc("plugin.corkboard.move", [src, dst, opts])
+    if not isinstance(res, dict):
+        sys.exit(f"corkboard: move {src} -> {dst}: no result from server")
+    if not res.get("moved"):
+        reason = res.get("reason") or "unknown"
+        extra = f" -- {res['error']}" if res.get("error") else ""
+        hint = _MOVE_HINTS.get(reason)
+        hint = f" ({hint})" if hint else ""
+        sys.exit(f"corkboard: move {src} -> {dst} failed: {reason}{extra}{hint}")
+    steps = res.get("steps", "?")
+    label = kind + ("+ns" if ns else "")
+    print(f"moved {src} -> {dst} ({label}, {steps} step(s))")
+    if check and kind == "page" and not ns:
+        _print_linkhealth(dst)
+
+
 # ------------------------------------------------------------------- lint
 # DokuWiki wikitext linter (issue #4). PURE string analysis — no RPC, no
 # DokuWiki instance — so it runs in the test harness exactly like apply_edits /
@@ -1456,6 +1499,34 @@ def main():
         help="abort after the first failed entry (default: continue and report all)",
     )
 
+    mv = sp.add_parser(
+        "move",
+        help="move/rename a page/media/namespace (move plugin: keeps history, rewrites links)",
+    )
+    mv.add_argument("src", help="source page/media/namespace id")
+    mv.add_argument("dst", help="destination id")
+    mv.add_argument(
+        "--kind", choices=["page", "media"], default="page", help="page (default) or media"
+    )
+    mv.add_argument("--ns", action="store_true", help="move the whole namespace, not one document")
+    mv.add_argument(
+        "--no-rewrite",
+        dest="rewrite",
+        action="store_false",
+        default=True,
+        help="do NOT rewrite backlinks across the wiki",
+    )
+    mv.add_argument(
+        "--autoskip", action="store_true", help="skip failures instead of aborting the move"
+    )
+    mv.add_argument(
+        "--no-check",
+        dest="check",
+        action="store_false",
+        default=True,
+        help="skip post-move link-health on the destination",
+    )
+
     raw = sp.add_parser("raw", help="escape hatch: call any JSON-RPC method")
     raw.add_argument("method")
     raw.add_argument("params", help="JSON array of params", nargs="?", default="[]")
@@ -1582,6 +1653,8 @@ def main():
         cmd_insert(args.page, kind, val, _read_input(args), args.sum, args.check, args.cas)
     elif args.cmd == "apply":
         cmd_apply(args.file, args.check, args.cas, args.stop_on_first_error)
+    elif args.cmd == "move":
+        cmd_move(args.src, args.dst, args.kind, args.ns, args.rewrite, args.autoskip, args.check)
     elif args.cmd == "raw":
         try:
             params = json.loads(args.params)

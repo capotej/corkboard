@@ -6,7 +6,7 @@ use dokuwiki\Search\MetadataSearch;
 /**
  * DokuWiki Plugin corkboard (Remote Component)
  *
- * RPC methods for the Corkboard agent. Two families:
+ * RPC methods for the Corkboard agent. Three families:
  *
  *   1. Wiki "gardening" queries — wanted pages, orphaned pages, unreferenced
  *      media, and per-page broken outgoing links (linkhealth) — each returned
@@ -15,6 +15,9 @@ use dokuwiki\Search\MetadataSearch;
  *   2. A compare-and-swap writer (cas) so the client's surgical edits can save
  *      only when the page revision they last read still matches — a concurrent
  *      edit can no longer be silently clobbered.
+ *   3. A move/rename (move) that delegates to the move plugin's plan helper —
+ *      relocating the attic (so history is preserved) and rewriting every
+ *      backlink in the plugin's own pass, run synchronously to completion.
  *
  * Public methods are auto-exported by RemotePlugin as plugin.corkboard.<method>.
  * Access is gated by the usual remote=1 / remoteuser=@api,@admin (the agent),
@@ -143,6 +146,129 @@ class remote_plugin_corkboard extends RemotePlugin
 
         $newrev = (string) (int) @filemtime(wikiFN($page));
         return ['saved' => true, 'conflict' => false, 'current_rev' => $newrev ?: null];
+    }
+
+    /**
+     * Move/rename a page, a media file, or a whole namespace — delegating to
+     * the move plugin's programmatic API (helper_plugin_move_plan) so the attic
+     * (revision history) is relocated, not stranded, and every backlink is
+     * rewritten in the plugin's own pass. Synchronous: commit() + a capped
+     * nextStep() loop run to completion in one call.
+     *
+     * Auth mirrors the move plugin's own checkPage/checkMedia: AUTH_EDIT src +
+     * AUTH_CREATE dst for pages, AUTH_DELETE src + AUTH_UPLOAD dst for media —
+     * both satisfied by the agent's own ACL (@api 16; see acl.auth.php), so no
+     * elevation is needed. Refuses with a `reason` before touching plan state
+     * when the caller lacks perms, src is missing, dst exists, the move plugin
+     * is absent, or another move is already committed (plan state is global and
+     * non-reentrant). Requires the move plugin (2024-05-07+) at lib/plugins/move.
+     *
+     * @param string $src
+     * @param string $dst
+     * @param array  $opts  kind:'page'|'media' (default page); ns:bool (move the
+     *                      whole namespace); rewrite:bool (default true — rewrite
+     *                      backlinks); autoskip:bool (default false — abort on
+     *                      first failure rather than skip)
+     * @return array{moved: bool, src: string, dst: string, kind: string, steps?: int, reason?: string, error?: ?string}
+     */
+    public function move($src, $dst, $opts = [])
+    {
+        $src  = cleanID($src);
+        $dst  = cleanID($dst);
+        $kind = ($opts['kind'] ?? 'page') === 'media' ? 'media' : 'page';
+        $ns   = !empty($opts['ns']);
+        $rewrite  = isset($opts['rewrite']) ? (bool) $opts['rewrite'] : true;
+        $autoskip = !empty($opts['autoskip']);
+
+        $base = ['src' => $src, 'dst' => $dst, 'kind' => $kind];
+
+        // Auth gate — mirrors the move plugin's checkPage/checkMedia.
+        if ($kind === 'media') {
+            $need_src = AUTH_DELETE;
+            $need_dst = AUTH_UPLOAD;
+        } else {
+            $need_src = AUTH_EDIT;
+            $need_dst = AUTH_CREATE;
+        }
+        if (auth_quickaclcheck($src) < $need_src || auth_quickaclcheck($dst) < $need_dst) {
+            return $base + ['moved' => false, 'reason' => 'no_auth'];
+        }
+
+        // For a single document, fail fast on existence before touching plan state.
+        if (!$ns) {
+            $src_exists = ($kind === 'media') ? file_exists(mediaFN($src)) : page_exists($src);
+            if (!$src_exists) {
+                return $base + ['moved' => false, 'reason' => 'not_found'];
+            }
+            $dst_exists = ($kind === 'media') ? file_exists(mediaFN($dst)) : page_exists($dst);
+            if ($dst_exists) {
+                return $base + ['moved' => false, 'reason' => 'exists'];
+            }
+        }
+
+        /** @var helper_plugin_move_plan|null $plan */
+        $plan = plugin_load('helper', 'move_plan');
+        if (!$plan) {
+            return $base + ['moved' => false, 'reason' => 'no_plugin'];
+        }
+        // Plan state is global/non-reentrant: refuse if a move is locked in.
+        if ($plan->isCommited()) {
+            return $base + ['moved' => false, 'reason' => 'in_progress'];
+        }
+
+        $plan->setOption('autorewrite', $rewrite);
+        $plan->setOption('autoskip', $autoskip);
+        if ($ns) {
+            if ($kind === 'media') {
+                $plan->addMediaNamespaceMove($src, $dst);
+            } else {
+                $plan->addPageNamespaceMove($src, $dst);
+            }
+        } else {
+            if ($kind === 'media') {
+                $plan->addMediaMove($src, $dst);
+            } else {
+                $plan->addPageMove($src, $dst);
+            }
+        }
+
+        try {
+            $committed = $plan->commit();
+        } catch (Exception $e) {
+            $plan->abort();
+            return $base + ['moved' => false, 'reason' => 'plugin_error', 'error' => $e->getMessage()];
+        }
+        if (!$committed) {
+            $err = $plan->getLastError();
+            $plan->abort();
+            return $base + ['moved' => false, 'reason' => $err ? 'plugin_error' : 'noop', 'error' => $err ?: null];
+        }
+
+        // Drive nextStep() to completion. It returns 0 when done, false on error
+        // (then getLastError()), or a positive int (remaining, forced >=1 to
+        // ensure one more call). Capped so a pathological namespace move can't
+        // hang the request — past the cap, abort and direct to the web UI.
+        $steps = 0;
+        $cap   = 500;
+        $left  = null;
+        while ($steps < $cap) {
+            $left = $plan->nextStep();
+            if ($left === false) {
+                $err = $plan->getLastError();
+                $plan->abort();
+                return $base + ['moved' => false, 'reason' => 'plugin_error', 'error' => $err ?: 'move failed', 'steps' => $steps];
+            }
+            $steps++;
+            if ((int) $left === 0) {
+                break;
+            }
+        }
+        if ((int) $left !== 0) {
+            $plan->abort();
+            return $base + ['moved' => false, 'reason' => 'too_large', 'steps' => $steps];
+        }
+
+        return $base + ['moved' => true, 'steps' => $steps];
     }
 
     /**

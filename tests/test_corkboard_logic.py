@@ -611,6 +611,81 @@ def test_lint_fix():
     check("clean content unchanged", cb.lint_fix(clean), (clean, 0))
 
 
+# --- move command (plugin.corkboard.move) ------------------------------------
+def _stub_move(result):
+    """Wire a no-op RPC stub for cmd_move; returns originals for restoration."""
+    orig = (cb.rpc, cb._linkhealth)
+    cb.rpc = lambda m, p: result
+    cb._linkhealth = lambda page: []
+    return orig
+
+
+def _run_move(result, **flags):
+    """Run cmd_move with stubs; return (stdout, exit_code_or_None)."""
+    defaults = dict(kind="page", ns=False, rewrite=True, autoskip=False, check=True)
+    defaults.update(flags)
+    buf = io.StringIO()
+    exit_code = None
+    orig = _stub_move(result)
+    try:
+        with contextlib.redirect_stdout(buf):
+            cb.cmd_move("old:page", "new:page", **defaults)
+    except SystemExit as e:
+        exit_code = e.code
+    finally:
+        cb.rpc, cb._linkhealth = orig
+    return buf.getvalue(), exit_code
+
+
+def test_build_move_opts_defaults():
+    check(
+        "move opts default to page, rewrite on",
+        cb.build_move_opts("page", False, True, False),
+        {"kind": "page", "ns": False, "rewrite": True, "autoskip": False},
+    )
+
+
+def test_build_move_opts_media_ns():
+    check(
+        "move opts reflect media + namespace",
+        cb.build_move_opts("media", True, True, False),
+        {"kind": "media", "ns": True, "rewrite": True, "autoskip": False},
+    )
+
+
+def test_build_move_opts_no_rewrite_autoskip():
+    check(
+        "move opts reflect --no-rewrite + --autoskip",
+        cb.build_move_opts("page", False, False, True),
+        {"kind": "page", "ns": False, "rewrite": False, "autoskip": True},
+    )
+
+
+def test_move_success_prints_and_checks():
+    out, exit_code = _run_move(
+        {"moved": True, "src": "old:page", "dst": "new:page", "kind": "page", "steps": 2}
+    )
+    check("move success prints moved line", "moved old:page -> new:page" in out, True)
+    check("move success reports steps", "2 step" in out, True)
+    check("move success runs link-health on dst", "no broken outgoing links" in out, True)
+    check("move success exits cleanly", exit_code is None, True)
+
+
+def test_move_failure_exits_with_reason():
+    out, exit_code = _run_move(
+        {"moved": False, "src": "old:page", "dst": "new:page", "kind": "page", "reason": "exists"}
+    )
+    check("move failure exits non-zero", bool(exit_code), True)
+    check("move failure names the reason", "exists" in str(exit_code), True)
+
+
+def test_move_in_progress_hint():
+    out, exit_code = _run_move(
+        {"moved": False, "src": "a", "dst": "b", "kind": "page", "reason": "in_progress"}
+    )
+    check("move in_progress surfaces the retry hint", "retry" in str(exit_code), True)
+
+
 def main():
     for fn in (
         test_apply_edits,
@@ -637,6 +712,12 @@ def main():
         test_lint_findings_sorted,
         test_lint_namespace_helper,
         test_lint_fix,
+        test_build_move_opts_defaults,
+        test_build_move_opts_media_ns,
+        test_build_move_opts_no_rewrite_autoskip,
+        test_move_success_prints_and_checks,
+        test_move_failure_exits_with_reason,
+        test_move_in_progress_hint,
     ):
         fn()
     print(f"\n{_passed} passed, {_failed} failed")
